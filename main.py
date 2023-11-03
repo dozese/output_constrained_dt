@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from sklearn.metrics import mean_squared_error
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 
@@ -95,10 +97,25 @@ targets_df
 
 full_df = pd.concat([features_df, targets_df], axis=1)
 
-x_train, x_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.2)
+x_train, x_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.3, random_state=0)
 
 regressor = RandomForestRegressor(n_estimators=100, random_state=0)
 regressor.fit(x_train, y_train)
-
 y_pred = regressor.predict(x_test)
-y_test
+print('\nRF Accuracy: ', mean_squared_error(y_test, y_pred))
+cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
+print('Number of infeasible predictions for RF: ', np.sum(cumsums >= 3))
+
+regressor = DecisionTreeRegressor(random_state=0)
+regressor.fit(x_train, y_train)
+y_pred = regressor.predict(x_test)
+print('\nDT Accuracy: ', mean_squared_error(y_test, y_pred))
+cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
+print('Number of infeasible predictions for DT: ', np.sum(cumsums >= 3))
+
+regressor = DecisionTreeRegressor(random_state=0, max_depth=3)
+regressor.fit(x_train, y_train)
+y_pred = regressor.predict(x_test)
+print('\nDT(max_depth=3) Accuracy: ', mean_squared_error(y_test, y_pred))
+cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
+print('Number of infeasible predictions for DT(max_depth=3): ', np.sum(cumsums >= 3))
