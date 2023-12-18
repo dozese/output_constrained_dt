@@ -181,7 +181,12 @@ class TreeForecast:
 
         if self.split_style == 'custom':
             split_info, split_gain, n_cuts = self.calcBestSplitCustom(features, target)
+        elif self.split_style == 'custom_lp':
+            split_info, split_gain, n_cuts = self.calcBestSplitCustomLP(features, target)
+        else:
+            splitCol, thresh = self.calcBestSplit(features, target, current_label)
 
+        if self.split_style in ['custom', 'custom_lp']:
             if n_cuts == 0:
                 node.is_terminal = True
                 return
@@ -193,8 +198,6 @@ class TreeForecast:
 
             splitCol = int(split_info[mean_rank_sort[0], 0])
             thresh = split_info[mean_rank_sort[0], 1]
-        else:
-            splitCol, thresh = self.calcBestSplit(features, target, current_label)
 
         node.column = splitCol
         node.column_name = features.columns[splitCol]
@@ -272,6 +275,8 @@ class TreeForecast:
         """
         if type == 'medoid':
             predictions = y[self.find_medoids(y)]
+        elif type == 'lp':
+            predictions = self.formulate_and_solve_lp(y)
         else:
             predictions = np.asarray(y.mean(axis=0))
 
@@ -488,30 +493,126 @@ class TreeForecast:
 
         return split_info, split_gain, n_cuts
 
+    def calcBestSplitCustomLP(self, features, labels):
+        n = features.shape[0]
+        cut_id = 0
+        n_obj = 1
+        split_perf = np.zeros((n * features.shape[1], n_obj))
+        split_info = np.zeros((n * features.shape[1], 2))
+        for k in range(features.shape[1]):
+            if self.verbose:
+                print(f'Feature Index: {k}')
+            x = features.iloc[:, k].to_numpy()
+            y = labels.to_numpy()
+            sort_idx = np.argsort(x)
+            sort_x = x[sort_idx]
+            sort_y = y[sort_idx, :]
+
+            for i in range(self.min_samples_leaf, n - self.min_samples_leaf - 1):
+                xi = sort_x[i]
+                left_yi = sort_y[:i, :]
+                right_yi = sort_y[i:, :]
+
+                left_instance_count = left_yi.shape[0]
+                right_instance_count = right_yi.shape[0]
+
+                left_prediction = self.nodePredictions(left_yi, type='lp')
+                right_prediction = self.nodePredictions(right_yi, type='lp')
+
+                left_perf = ((left_yi - left_prediction) ** 2).mean()
+                right_perf = ((right_yi - right_prediction) ** 2).mean()
+                curr_score = (left_perf * left_instance_count + right_perf * right_instance_count) / n
+
+                split_perf[cut_id, 0] = curr_score
+                split_info[cut_id, 0] = k
+                split_info[cut_id, 1] = xi
+
+                if i < self.min_samples_leaf or xi == sort_x[i + 1]:
+                    continue
+
+                cut_id += 1
+
+        split_info = split_info[range(cut_id), :]
+        split_gain = split_perf[range(cut_id), :]
+        n_cuts = cut_id
+
+        split_info = split_info[~np.isnan(split_gain).any(axis=1),:]
+        split_gain = split_gain[~np.isnan(split_gain).any(axis=1),:]
+
+        return split_info, split_gain, n_cuts
+
+    def formulate_and_solve_lp(self, y):
+        print(y)
+
+        num_targets = y.shape[1]
+
+        import gurobipy as gp
+        from gurobipy import GRB
+
+        # Create model
+        model = gp.Model("Minimize SSE")
+
+        # Create decision variables
+        predictions = model.addVars(num_targets, lb=0, ub=100, name="y")
+        binary_vars = model.addVars(num_targets, vtype=GRB.BINARY, name="z")
+
+        # Create objective function
+        sse = gp.quicksum((predictions[i] - y[i][j]) * (predictions[i] - y[i][j]) for i in range(num_targets) for j in range(len(y[i])))
+        model.setObjective(sse, GRB.MINIMIZE)
+
+        # Create constraints
+        model.addConstr(binary_vars.sum() == 1, "one_prediction_constraint")
+        for i in range(num_targets):
+            model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
+
+        # Solve the problem
+        model.optimize()
+
+        if self.verbose:
+            print("Optimal Solution:")
+            for i in range(num_targets):
+                print(f"Target {i + 1}: Prediction = {predictions[i].X}, Indicator = {binary_vars[i].X}")
+            print("Objective (Sum of Squared Errors):", model.objVal)
+
+        preds = np.array([predictions[i].X for i in range(num_targets)])
+
+        return preds
+
+
+
 
 if __name__ == '__main__':
     custom_dt_depth = 15
-    custom_dt_min_samples_split = 40
-    custom_dt_min_samples_leaf = 20
+    custom_dt_min_samples_split = 20
+    custom_dt_min_samples_leaf = 10
     custom_dt_obj_weights = [1.0]
     test_set_ratio = 0.2
+    target_size = 3
+    feature_size = 2
 
-    base_folder = os.path.dirname(os.getcwd())
+    base_folder = os.getcwd()
+    target_cols = [f'Course{id + 1}' for id in range(target_size)]
+    feature_cols = [f'Feature{id + 1}' for id in range(feature_size)]
 
-    feature_cols = ['EnrolledElectiveBefore', 'GradeAvgFromPreviousElective',
-                    'Grade', 'Major', 'Class', 'GradePerm']
-    target_cols = [f'Course{id + 1}' for id in range(5)]
+    if target_size == 3:
+        full_df = pd.read_csv(f'{base_folder}/data/full_df_size_300_targets_3.csv')
 
-    full_df = pd.read_csv(f'{base_folder}/data/full_df.csv')
+        features_df = full_df[feature_cols]
+        targets_df = full_df[target_cols]
+    else:
+        feature_cols = ['EnrolledElectiveBefore', 'GradeAvgFromPreviousElective',
+                        'Grade', 'Major', 'Class', 'GradePerm']
 
-    features_df = full_df[feature_cols]
-    targets_df = full_df[target_cols]
+        full_df = pd.read_csv(f'{base_folder}/data/full_df.csv')
+
+        features_df = full_df[feature_cols]
+        targets_df = full_df[target_cols]
 
     X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df,
                                                         test_size=test_set_ratio, shuffle=True)
 
     tree = TreeForecast(target_type='multi', max_depth=custom_dt_depth, max_features=None,
-                        min_samples_leaf=custom_dt_min_samples_leaf, split_style='custom',
+                        min_samples_leaf=custom_dt_min_samples_leaf, split_style='custom_lp',
                         min_samples_split=custom_dt_min_samples_split, target_diff=False,
                         obj_weights=custom_dt_obj_weights, lambda_decay=0.5, verbose=False)
 
@@ -528,3 +629,7 @@ if __name__ == '__main__':
     print('\nDT Accuracy: ', mean_squared_error(y_test, y_pred_sklearn))
     cumsums_sklearn = np.array([sum(y_pred_sklearn[i] > 0.0001) for i in range(len(y_pred_sklearn))])
     print('Number of infeasible predictions for DT: ', np.sum(cumsums_sklearn >= 3))
+
+    test_leaves = tree.apply(X_test, custom_dt_depth)
+    y_test_df = pd.DataFrame.from_dict({'instance_id': X_test.index.values, 'leaf_id': test_leaves}).set_index('instance_id')
+    y_test_df = pd.merge(y_test_df, y_test, left_index=True, right_index=True).sort_values('leaf_id')
