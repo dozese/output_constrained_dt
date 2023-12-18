@@ -561,7 +561,7 @@ class TreeForecast:
         model.setObjective(sse, GRB.MINIMIZE)
 
         # Create constraints
-        model.addConstr(binary_vars.sum() == 1, "one_prediction_constraint")
+        model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
         for i in range(num_targets):
             model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
 
