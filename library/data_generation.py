@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 
@@ -6,6 +7,8 @@ np.random.seed(0)
 data_size = 300
 target_size = 3
 feature_size = 2
+
+base_folder = os.path.dirname(os.getcwd())
 
 feature_cols = [f'Feature{id+1}' for id in range(feature_size)]
 target_cols = [f'Course{id+1}' for id in range(target_size)]
@@ -36,4 +39,4 @@ targets_df = binary_targets_df * numeric_targets_df
 
 full_df = pd.concat([features_df, targets_df], axis=1)
 full_df = full_df.sample(frac=1, random_state=0).reset_index(drop=True)
-full_df.to_csv(f'data/full_df_size_{data_size}_targets_{target_size}.csv', index=False)
+full_df.to_csv(f'{base_folder}/data/full_df_size_{data_size}_targets_{target_size}.csv', index=False)
