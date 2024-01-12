@@ -534,6 +534,7 @@ class TreeForecast:
 
         # Create model
         model = gp.Model("Minimize SSE")
+        model.Params.LogToConsole = 0
 
         # Create decision variables
         predictions = model.addVars(num_targets, lb=0, ub=100, name="y")
@@ -617,6 +618,7 @@ class TreeForecast:
 
         # Create a new Gurobi model
         model = gp.Model("Binary and Continuous Variables")
+        model.Params.LogToConsole = 0
 
         # Define variables
         y = model.addVars(1, lb=0, name="y")  # Continuous variables
@@ -636,8 +638,9 @@ class TreeForecast:
         preds = np.array([z[0].X, y[0].X])
 
         # Display the results
-        print(f"Optimal Solution: {preds}")
-        print(f"Objective (Sum of Squared Errors): {model.objVal}")
+        if self.verbose:
+            print(f"Optimal Solution: {preds}")
+            print(f"Objective (Sum of Squared Errors): {model.objVal}")
 
         return preds
 
@@ -649,7 +652,7 @@ if __name__ == '__main__':
     custom_dt_min_samples_leaf = 10
     test_set_ratio = 0.2
 
-    dataset = 'class'
+    dataset = 'cars'
     class_target_size = 5
     base_folder = os.getcwd()
 
@@ -700,11 +703,11 @@ if __name__ == '__main__':
     print('\nOCRT MSE: ', mean_squared_error(y_test, y_pred))
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print('Number of infeasible predictions for OCRT: ', np.sum(cumsums >= 3))
+        print(f'Number of infeasible predictions for OCRT (Depth {custom_dt_depth}): {np.sum(cumsums >= 3)}')
     else:
         y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
         infeasible_rows = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
-        print('Number of infeasible predictions for OCRT: ', infeasible_rows)
+        print(f'Number of infeasible predictions for OCRT (Depth {custom_dt_depth}): {infeasible_rows}')
 
     tree_medoid = TreeForecast(target_type='multi', max_depth=custom_dt_depth,
                         min_samples_leaf=custom_dt_min_samples_leaf, split_style='custom',
@@ -716,11 +719,11 @@ if __name__ == '__main__':
     print('\nMedoid MSE: ', mean_squared_error(y_test, y_pred_medoid))
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print('Number of infeasible predictions for Medoid DT: ', np.sum(cumsums >= 3))
+        print(f'Number of infeasible predictions for Medoid DT (Depth {custom_dt_depth}): {np.sum(cumsums >= 3)}')
     else:
         y_pred_medoid_df = pd.DataFrame(y_pred_medoid, columns=target_cols)
         infeasible_rows = y_pred_medoid_df[(y_pred_medoid_df['TARGET_FLAG'] == 0) & (y_pred_medoid_df['TARGET_AMT'] > 0)].shape[0]
-        print('Number of infeasible predictions for Medoid DT: ', infeasible_rows)
+        print(f'Number of infeasible predictions for Medoid DT (Depth {custom_dt_depth}): {infeasible_rows}')
 
     regressor = DecisionTreeRegressor(random_state=20)
     regressor.fit(X_train, y_train)
@@ -728,12 +731,12 @@ if __name__ == '__main__':
     print('\nDT MSE: ', mean_squared_error(y_test, y_pred_sklearn))
     if dataset == 'class':
         cumsums_sklearn = np.array([sum(y_pred_sklearn[i] > 0.0001) for i in range(len(y_pred_sklearn))])
-        print('Number of infeasible predictions for DT: ', np.sum(cumsums_sklearn >= 3))
+        print(f'Number of infeasible predictions for DT (Depth {custom_dt_depth}): {np.sum(cumsums_sklearn >= 3)}')
     else:
         y_pred_sklearn_df = pd.DataFrame(y_pred_sklearn, columns=target_cols)
         infeasible_rows = y_pred_sklearn_df[(y_pred_sklearn_df['TARGET_FLAG'] == 0) & (y_pred_sklearn_df['TARGET_AMT'] > 0)].shape[0]
-        print('Number of infeasible predictions for DT: ', infeasible_rows)
+        print(f'Number of infeasible predictions for DT (Depth {custom_dt_depth}): {infeasible_rows}')
 
-    test_leaves = tree.apply(X_test, custom_dt_depth)
+    test_leaves = tree.apply(X_test)
     y_test_df = pd.DataFrame.from_dict({'instance_id': X_test.index.values, 'leaf_id': test_leaves}).set_index('instance_id')
     y_test_df = pd.merge(y_test_df, y_test, left_index=True, right_index=True).sort_values('leaf_id')
