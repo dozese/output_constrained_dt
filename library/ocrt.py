@@ -220,11 +220,11 @@ class TreeForecast:
         self.Tree.id = 1
         self.buildDT(features, labels, self.Tree)
 
-    def predict(self, features, depth):
+    def predict(self, features):
         '''
         Returns the labels for each X
         '''
-        predictions = [self.predictSample(features.loc[i], depth, self.Tree) for i in features.index]
+        predictions = [self.predictSample(features.loc[i], self.max_depth, self.Tree) for i in features.index]
         return np.asarray(predictions)
 
     def predictSample(self, features, depth, node):
@@ -351,18 +351,17 @@ class TreeForecast:
 
         return predicted
 
-    def apply(self, features, depth):
+    def apply(self, features):
         """
         Returns the node ID for each input object.
 
         Args:
             features (pandas.DataFrame): The input features for multiple objects.
-            depth (int): The depth at which to stop traversing the tree.
 
         Returns:
             predicted_ids (numpy.ndarray): The predicted node IDs for each input object.
         """
-        predicted_ids = [self.applySample(features.loc[i], depth, self.Tree) for i in features.index]
+        predicted_ids = [self.applySample(features.loc[i], self.max_depth, self.Tree) for i in features.index]
         predicted_ids = np.asarray(predicted_ids)
         return predicted_ids
 
@@ -650,17 +649,17 @@ if __name__ == '__main__':
     custom_dt_min_samples_leaf = 10
     test_set_ratio = 0.2
 
-    dataset = 'cars'
+    dataset = 'class'
+    class_target_size = 5
     base_folder = os.getcwd()
 
     if dataset == 'class':
         split_style = 'custom_lp_courses_data'
-        target_size = 3
-        feature_size = 2
 
-        target_cols = [f'Course{id + 1}' for id in range(target_size)]
-        feature_cols = [f'Feature{id + 1}' for id in range(feature_size)]
-        if target_size == 3:
+        target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
+        if class_target_size == 3:
+            feature_size = 2
+            feature_cols = [f'Feature{id + 1}' for id in range(feature_size)]
             full_df = pd.read_csv(f'{base_folder}/data/full_df_size_300_targets_3.csv')
 
             features_df = full_df[feature_cols]
@@ -669,7 +668,7 @@ if __name__ == '__main__':
             feature_cols = ['EnrolledElectiveBefore', 'GradeAvgFromPreviousElective',
                             'Grade', 'Major', 'Class', 'GradePerm']
 
-            full_df = pd.read_csv(f'{base_folder}/data/full_df.csv')
+            full_df = pd.read_csv(f'{base_folder}/data/full_df_size_1000_targets_5.csv')
 
             features_df = full_df[feature_cols]
             targets_df = full_df[target_cols]
@@ -697,7 +696,7 @@ if __name__ == '__main__':
 
     tree.fit(X_train, y_train)
 
-    y_pred = tree.predict(X_test, custom_dt_depth)
+    y_pred = tree.predict(X_test)
     print('\nOCRT MSE: ', mean_squared_error(y_test, y_pred))
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
@@ -713,7 +712,7 @@ if __name__ == '__main__':
 
     tree_medoid.fit(X_train, y_train)
 
-    y_pred_medoid = tree_medoid.predict(X_test, custom_dt_depth)
+    y_pred_medoid = tree_medoid.predict(X_test)
     print('\nMedoid MSE: ', mean_squared_error(y_test, y_pred_medoid))
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
