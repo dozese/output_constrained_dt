@@ -56,7 +56,6 @@ class TreeForecast:
     Predictive Clustering Tree.
 
     Args:
-        target_type (str): Type of target variable ('multi', 'single', 'pca', etc.).
         max_depth (int): Maximum depth of the tree.
         min_samples_leaf (int): Minimum number of samples in a leaf node.
         min_samples_split (int): Minimum number of samples to split a node.
@@ -67,7 +66,6 @@ class TreeForecast:
         max_depth (int): Maximum depth of the tree.
         min_samples_leaf (int): Minimum number of samples in a leaf node.
         min_samples_split (int): Minimum number of samples to split a node.
-        target_type (str): Type of target variable ('multi', 'single', 'pca', etc.).
         split_style (str): Splitting style (e.g. 'custom')
         verbose (bool): Whether to print verbose information.
         Tree (Node): Root node of the predictive clustering tree.
@@ -81,9 +79,6 @@ class TreeForecast:
 
         nodePredictions(y):
             Calculate predictions for a node.
-
-        selectTarget(target_type, labels):
-            Select the target variable.
 
         applySample(features, depth, node):
             Passes one object through the decision tree and returns the prediction.
@@ -101,17 +96,15 @@ class TreeForecast:
             Calculates the best custom split for features and labels.
     """
     def __init__(self,
-                 target_type = 'multi',
                  max_depth = 5,
-                 min_samples_leaf = 1,
-                 min_samples_split = 2,
+                 min_samples_leaf = 5,
+                 min_samples_split = 10,
                  split_style = None,
                  verbose = False
                  ):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
-        self.target_type = target_type
         self.split_style = split_style
         self.verbose = verbose
         self.Tree = None
@@ -125,9 +118,9 @@ class TreeForecast:
             labels (pandas.DataFrame): The labels or target variables corresponding to the features.
             node (Node): The current node in the tree being built.
         """
-        if self.split_style == 'custom_lp_courses_data':
+        if self.split_style == 'optimal_courses':
             node.prediction = self.nodePredictions(labels.to_numpy(), 'lp_courses_data')
-        elif self.split_style == 'custom_lp_cars_data':
+        elif self.split_style == 'optimal_cars':
             node.prediction = self.nodePredictions(labels.to_numpy(), 'lp_cars_data')
         else:
             node.prediction = self.nodePredictions(labels.to_numpy(), 'medoid')
@@ -141,37 +134,19 @@ class TreeForecast:
             node.is_terminal = True
             return
 
-        if self.target_type == "multi":
-            current_label = range(labels.shape[1])
-            target = labels
-        elif self.target_type == "single":
-            current_label = 0
-            target = labels
-        else:
-            current_label = self.selectTarget(self.target_type, labels)
+        current_label = range(labels.shape[1])
+        target = labels
 
-            if self.target_type == "pca":
-                target = pd.DataFrame(current_label)
-                current_label = 0
-            elif self.target_type == "pca-random":
-                target = pd.DataFrame(current_label)
-                current_label = random.randint(0, target.shape[1]-1)
-            elif self.target_type == "mean":
-                target = pd.DataFrame(current_label)
-                current_label = 0
-            else:
-                target = labels
-
-        if self.split_style == 'custom':
+        if self.split_style == 'medoid':
             split_info, split_gain, n_cuts = self.calcBestSplitCustom(features, target)
-        elif self.split_style == 'custom_lp_courses_data':
+        elif self.split_style == 'optimal_courses':
             split_info, split_gain, n_cuts = self.calcBestSplitCustomLPCourses(features, target)
-        elif self.split_style == 'custom_lp_cars_data':
+        elif self.split_style == 'optimal_cars':
             split_info, split_gain, n_cuts = self.calcBestSplitCustomLPCars(features, target)
         else:
             splitCol, thresh = self.calcBestSplit(features, target, current_label)
 
-        if self.split_style in ['custom', 'custom_lp_courses_data', 'custom_lp_cars_data']:
+        if self.split_style in ['medoid', 'optimal_courses', 'optimal_cars']:
             if n_cuts == 0:
                 node.is_terminal = True
                 return
@@ -240,7 +215,7 @@ class TreeForecast:
         if node.depth == depth:
             return node.prediction
 
-        if features[node.column] > node.threshold:
+        if features.iloc[node.column] > node.threshold:
             predicted = self.predictSample(features, depth, node.right)
         else:
             predicted = self.predictSample(features, depth, node.left)
@@ -283,46 +258,6 @@ class TreeForecast:
 
         return np.argmin(yi_dist.mean(axis=1))
 
-    def selectTarget(self, target_type, labels):
-        """
-        Select the target variable.
-
-        Args:
-            target_type (str): Type of target variable ('random', 'max_var', 'max_cor', 'max_inv_cor', 'pca', 'pca-random', 'mean').
-            labels (pandas.DataFrame): The labels or target variables corresponding to the features.
-
-        Returns:
-            int or numpy.ndarray: The selected target variable or index.
-        """
-        if target_type == 'random':
-            return(random.randint(0, labels.shape[1]-1))
-        elif target_type == 'max_var':
-            target_var = labels.var(axis=0)
-            max_index = np.where(target_var.index == target_var.idxmax())
-            return max_index[0]
-        elif target_type == 'max_cor':
-            cor_mat = labels.corr()
-            avg = cor_mat.mean(axis=1)
-            max_index = np.where(avg.index == avg.idxmax())
-            return max_index[0]
-        elif target_type == 'max_inv_cor':
-            cor_mat = labels.corr().to_numpy()
-            inv_cor = np.abs(np.linalg.inv(cor_mat))
-            avg = inv_cor.mean(axis=1)
-            max_index = np.where(avg == max(avg))
-            return max_index[0]
-        elif target_type == 'pca':
-            pca = PCA(n_components=1).fit_transform(labels)
-            return pca
-        elif target_type == 'pca-random':
-            if labels.shape[1] < labels.shape[0]:
-                pca = PCA(n_components=labels.shape[1]).fit_transform(labels)
-            else:
-                pca = PCA(n_components=labels.shape[0]).fit_transform(labels)
-            return pca
-        elif target_type == 'mean':
-            return labels.mean(axis=1)
-
     def applySample(self, features, depth, node):
         """
         Passes one object through the predictive clustering tree and returns the leaf ID.
@@ -344,7 +279,7 @@ class TreeForecast:
         if node.depth == depth:
             return node.id
 
-        if features[node.column] > node.threshold:
+        if features.iloc[node.column] > node.threshold:
             predicted = self.applySample(features, depth, node.right)
         else:
             predicted = self.applySample(features, depth, node.left)
@@ -647,17 +582,17 @@ class TreeForecast:
 
 
 if __name__ == '__main__':
-    custom_dt_depth = 15
-    custom_dt_min_samples_split = 20
-    custom_dt_min_samples_leaf = 10
+    ocrt_depth = 15
+    ocrt_min_samples_split = 20
+    ocrt_min_samples_leaf = 10
     test_set_ratio = 0.2
 
-    dataset = 'cars'
+    dataset = 'courses'
     class_target_size = 5
     base_folder = os.getcwd()
 
     if dataset == 'class':
-        split_style = 'custom_lp_courses_data'
+        split_style = 'optimal_courses'
 
         target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
         if class_target_size == 3:
@@ -676,7 +611,7 @@ if __name__ == '__main__':
             features_df = full_df[feature_cols]
             targets_df = full_df[target_cols]
     else:
-        split_style = 'custom_lp_cars_data'
+        split_style = 'optimal_cars'
 
         full_df = pd.read_csv(f'{base_folder}/data/insurance_evaluation_data.csv').drop(columns=['INDEX']).dropna()[:500]
 
@@ -687,31 +622,28 @@ if __name__ == '__main__':
                         'BLUEBOOK', 'TIF', 'OLDCLAIM', 'CLM_FREQ', 'MVR_PTS', 'CAR_AGE']
         features_df = full_df[feature_cols]
         currency_cols = features_df.select_dtypes('object').columns
-        features_df[currency_cols] = features_df[currency_cols].replace('[\$,]', '', regex=True).astype(float)
+        features_df.loc[:, currency_cols] = features_df[currency_cols].replace('[\$,]', '', regex=True).astype(float)
 
 
     X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df,
                                                         test_size=test_set_ratio, shuffle=True)
 
-    tree = TreeForecast(target_type='multi', max_depth=custom_dt_depth,
-                        min_samples_leaf=custom_dt_min_samples_leaf, split_style=split_style,
-                        min_samples_split=custom_dt_min_samples_split, verbose=False)
-
+    tree = TreeForecast(max_depth=ocrt_depth, split_style=split_style, min_samples_leaf=ocrt_min_samples_leaf,
+                 min_samples_split=ocrt_min_samples_split, verbose=False)
     tree.fit(X_train, y_train)
 
     y_pred = tree.predict(X_test)
     print('\nOCRT MSE: ', mean_squared_error(y_test, y_pred))
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print(f'Number of infeasible predictions for OCRT (Depth {custom_dt_depth}): {np.sum(cumsums >= 3)}')
+        print(f'Number of infeasible predictions for OCRT (Depth {ocrt_depth}): {np.sum(cumsums >= 3)}')
     else:
         y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
         infeasible_rows = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for OCRT (Depth {custom_dt_depth}): {infeasible_rows}')
+        print(f'Number of infeasible predictions for OCRT (Depth {ocrt_depth}): {infeasible_rows}')
 
-    tree_medoid = TreeForecast(target_type='multi', max_depth=custom_dt_depth,
-                        min_samples_leaf=custom_dt_min_samples_leaf, split_style='custom',
-                        min_samples_split=custom_dt_min_samples_split, verbose=False)
+    tree_medoid = TreeForecast(max_depth=ocrt_depth, split_style='medoid', min_samples_leaf=ocrt_min_samples_leaf,
+                        min_samples_split=ocrt_min_samples_split, verbose=False)
 
     tree_medoid.fit(X_train, y_train)
 
@@ -719,11 +651,11 @@ if __name__ == '__main__':
     print('\nMedoid MSE: ', mean_squared_error(y_test, y_pred_medoid))
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print(f'Number of infeasible predictions for Medoid DT (Depth {custom_dt_depth}): {np.sum(cumsums >= 3)}')
+        print(f'Number of infeasible predictions for Medoid DT (Depth {ocrt_depth}): {np.sum(cumsums >= 3)}')
     else:
         y_pred_medoid_df = pd.DataFrame(y_pred_medoid, columns=target_cols)
         infeasible_rows = y_pred_medoid_df[(y_pred_medoid_df['TARGET_FLAG'] == 0) & (y_pred_medoid_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for Medoid DT (Depth {custom_dt_depth}): {infeasible_rows}')
+        print(f'Number of infeasible predictions for Medoid DT (Depth {ocrt_depth}): {infeasible_rows}')
 
     regressor = DecisionTreeRegressor(random_state=20)
     regressor.fit(X_train, y_train)
@@ -731,11 +663,11 @@ if __name__ == '__main__':
     print('\nDT MSE: ', mean_squared_error(y_test, y_pred_sklearn))
     if dataset == 'class':
         cumsums_sklearn = np.array([sum(y_pred_sklearn[i] > 0.0001) for i in range(len(y_pred_sklearn))])
-        print(f'Number of infeasible predictions for DT (Depth {custom_dt_depth}): {np.sum(cumsums_sklearn >= 3)}')
+        print(f'Number of infeasible predictions for DT (Depth {ocrt_depth}): {np.sum(cumsums_sklearn >= 3)}')
     else:
         y_pred_sklearn_df = pd.DataFrame(y_pred_sklearn, columns=target_cols)
         infeasible_rows = y_pred_sklearn_df[(y_pred_sklearn_df['TARGET_FLAG'] == 0) & (y_pred_sklearn_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for DT (Depth {custom_dt_depth}): {infeasible_rows}')
+        print(f'Number of infeasible predictions for DT (Depth {ocrt_depth}): {infeasible_rows}')
 
     test_leaves = tree.apply(X_test)
     y_test_df = pd.DataFrame.from_dict({'instance_id': X_test.index.values, 'leaf_id': test_leaves}).set_index('instance_id')
