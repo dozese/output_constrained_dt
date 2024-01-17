@@ -16,7 +16,84 @@ from sklearn.metrics import mean_squared_error
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import euclidean_distances
 
-from gurobipy import Model, GRB
+import gurobipy as gp
+from gurobipy import GRB
+
+
+def formulate_and_solve_lp_cars_data(y, verbose, bigM=100000):
+    # Create a new Gurobi model
+    model = gp.Model("Binary and Continuous Variables")
+    if not verbose:
+        model.Params.LogToConsole = 0
+
+    # Define variables
+    predictions = model.addVars(1, lb=0, name="y")  # Continuous variables
+    binary_vars = model.addVars(1, vtype=GRB.BINARY, name="z")  # Binary indicators
+
+    # Objective: Minimize Sum of Squared Errors (SSE)
+    sse = gp.quicksum((predictions[0] - y[i][1]) * (predictions[0] - y[i][1]) for i in range(y.shape[0]))
+    model.setObjective(sse, GRB.MINIMIZE)
+
+    # Constraints
+    model.addConstr(predictions[0] >= binary_vars[0], "y_constraint")
+    model.addConstr(predictions[0] <= bigM * binary_vars[0], "y_upper_bound_constraint")
+
+    # Optimize the model
+    model.optimize()
+
+    preds = np.array([binary_vars[0].X, predictions[0].X])
+
+    # Display the results
+    if verbose:
+        print(f"Optimal Solution: {preds}")
+        print(f"Objective (Sum of Squared Errors): {model.objVal}")
+
+    return preds
+
+
+def formulate_and_solve_lp_courses_data(y, verbose):
+    num_targets = y.shape[1]
+
+    # Create model
+    model = gp.Model("Minimize SSE")
+    if not verbose:
+        model.Params.LogToConsole = 0
+
+    # Create decision variables
+    predictions = model.addVars(num_targets, lb=0, ub=100, name="y")
+    binary_vars = model.addVars(num_targets, vtype=GRB.BINARY, name="z")
+
+    # Create objective function
+    sse = gp.quicksum((predictions[i] - y[i][j]) * (predictions[i] - y[i][j]) for i in range(num_targets) for j in range(len(y[i])))
+    model.setObjective(sse, GRB.MINIMIZE)
+
+    # Create constraints
+    model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
+    for i in range(num_targets):
+        model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
+
+    # Solve the problem
+    model.optimize()
+
+    if verbose:
+        print("Optimal Solution:")
+        for i in range(num_targets):
+            print(f"Target {i + 1}: Prediction = {predictions[i].X}, Indicator = {binary_vars[i].X}")
+        print("Objective (Sum of Squared Errors):", model.objVal)
+
+    preds = np.array([predictions[i].X for i in range(num_targets)])
+
+    return preds
+
+def calculate_number_of_infeasibilities(y_pred, dataset, model, ocrt_depth, target_cols):
+    if dataset == 'class':
+        cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
+        print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {np.sum(cumsums >= 3)}')
+    else:
+        y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
+        infeasible_rows = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
+        print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {infeasible_rows}')
+
 
 class Node:
     """
@@ -100,12 +177,14 @@ class TreeForecast:
                  min_samples_leaf = 5,
                  min_samples_split = 10,
                  split_style = None,
+                 optimization_problem = None,
                  verbose = False
                  ):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
         self.split_style = split_style
+        self.optimization_problem = optimization_problem
         self.verbose = verbose
         self.Tree = None
 
@@ -118,12 +197,7 @@ class TreeForecast:
             labels (pandas.DataFrame): The labels or target variables corresponding to the features.
             node (Node): The current node in the tree being built.
         """
-        if self.split_style == 'optimal_courses':
-            node.prediction = self.nodePredictions(labels.to_numpy(), 'lp_courses_data')
-        elif self.split_style == 'optimal_cars':
-            node.prediction = self.nodePredictions(labels.to_numpy(), 'lp_cars_data')
-        else:
-            node.prediction = self.nodePredictions(labels.to_numpy(), 'medoid')
+        node.prediction = self.nodePredictions(labels.to_numpy())
 
         node.count = labels.shape[0]
         if node.depth >= self.max_depth:
@@ -137,16 +211,9 @@ class TreeForecast:
         current_label = range(labels.shape[1])
         target = labels
 
-        if self.split_style == 'medoid':
+        if self.split_style in ['medoid', 'optimal']:
             split_info, split_gain, n_cuts = self.calcBestSplitCustom(features, target)
-        elif self.split_style == 'optimal_courses':
-            split_info, split_gain, n_cuts = self.calcBestSplitCustomLPCourses(features, target)
-        elif self.split_style == 'optimal_cars':
-            split_info, split_gain, n_cuts = self.calcBestSplitCustomLPCars(features, target)
-        else:
-            splitCol, thresh = self.calcBestSplit(features, target, current_label)
 
-        if self.split_style in ['medoid', 'optimal_courses', 'optimal_cars']:
             if n_cuts == 0:
                 node.is_terminal = True
                 return
@@ -157,6 +224,8 @@ class TreeForecast:
 
             splitCol = int(split_info[mean_rank_sort[0], 0])
             thresh = split_info[mean_rank_sort[0], 1]
+        else:
+            splitCol, thresh = self.calcBestSplit(features, target, current_label)
 
         node.column = splitCol
         node.column_name = features.columns[splitCol]
@@ -222,7 +291,7 @@ class TreeForecast:
 
         return predicted
 
-    def nodePredictions(self, y, type='medoid'):
+    def nodePredictions(self, y):
         """
         Calculate predictions for a node as the mean.
 
@@ -232,12 +301,10 @@ class TreeForecast:
         Returns:
             predictions (numpy.ndarray): Predictions for the node, which represent the mean of target variables.
         """
-        if type == 'medoid':
+        if self.split_style == 'medoid':
             predictions = y[self.find_medoids(y)]
-        elif type == 'lp_courses_data':
-            predictions = self.formulate_and_solve_lp_courses_data(y)
-        elif type == 'lp_cars_data':
-            predictions = self.formulate_and_solve_lp_cars_data(y)
+        elif self.split_style == 'optimal':
+            predictions = self.optimization_problem(y, self.verbose)
         else:
             predictions = np.asarray(y.mean(axis=0))
 
@@ -388,8 +455,8 @@ class TreeForecast:
                 left_instance_count = left_yi.shape[0]
                 right_instance_count = right_yi.shape[0]
 
-                left_prediction = self.nodePredictions(left_yi, type='medoid')
-                right_prediction = self.nodePredictions(right_yi, type='medoid')
+                left_prediction = self.nodePredictions(left_yi)
+                right_prediction = self.nodePredictions(right_yi)
 
                 left_perf = ((left_yi - left_prediction) ** 2).mean()
                 right_perf = ((right_yi - right_prediction) ** 2).mean()
@@ -412,173 +479,6 @@ class TreeForecast:
         split_gain = split_gain[~np.isnan(split_gain).any(axis=1),:]
 
         return split_info, split_gain, n_cuts
-
-    def calcBestSplitCustomLPCourses(self, features, labels):
-        n = features.shape[0]
-        cut_id = 0
-        n_obj = 1
-        split_perf = np.zeros((n * features.shape[1], n_obj))
-        split_info = np.zeros((n * features.shape[1], 2))
-        for k in range(features.shape[1]):
-            if self.verbose:
-                print(f'Feature Index: {k}')
-            x = features.iloc[:, k].to_numpy()
-            y = labels.to_numpy()
-            sort_idx = np.argsort(x)
-            sort_x = x[sort_idx]
-            sort_y = y[sort_idx, :]
-
-            for i in range(self.min_samples_leaf, n - self.min_samples_leaf - 1):
-                xi = sort_x[i]
-                left_yi = sort_y[:i, :]
-                right_yi = sort_y[i:, :]
-
-                left_instance_count = left_yi.shape[0]
-                right_instance_count = right_yi.shape[0]
-
-                left_prediction = self.nodePredictions(left_yi, type='lp_courses_data')
-                right_prediction = self.nodePredictions(right_yi, type='lp_courses_data')
-
-                left_perf = ((left_yi - left_prediction) ** 2).mean()
-                right_perf = ((right_yi - right_prediction) ** 2).mean()
-                curr_score = (left_perf * left_instance_count + right_perf * right_instance_count) / n
-
-                split_perf[cut_id, 0] = curr_score
-                split_info[cut_id, 0] = k
-                split_info[cut_id, 1] = xi
-
-                if i < self.min_samples_leaf or xi == sort_x[i + 1]:
-                    continue
-
-                cut_id += 1
-
-        split_info = split_info[range(cut_id), :]
-        split_gain = split_perf[range(cut_id), :]
-        n_cuts = cut_id
-
-        split_info = split_info[~np.isnan(split_gain).any(axis=1),:]
-        split_gain = split_gain[~np.isnan(split_gain).any(axis=1),:]
-
-        return split_info, split_gain, n_cuts
-
-    def formulate_and_solve_lp_courses_data(self, y):
-        num_targets = y.shape[1]
-
-        import gurobipy as gp
-        from gurobipy import GRB
-
-        # Create model
-        model = gp.Model("Minimize SSE")
-        model.Params.LogToConsole = 0
-
-        # Create decision variables
-        predictions = model.addVars(num_targets, lb=0, ub=100, name="y")
-        binary_vars = model.addVars(num_targets, vtype=GRB.BINARY, name="z")
-
-        # Create objective function
-        sse = gp.quicksum((predictions[i] - y[i][j]) * (predictions[i] - y[i][j]) for i in range(num_targets) for j in range(len(y[i])))
-        model.setObjective(sse, GRB.MINIMIZE)
-
-        # Create constraints
-        model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
-        for i in range(num_targets):
-            model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
-
-        # Solve the problem
-        model.optimize()
-
-        if self.verbose:
-            print("Optimal Solution:")
-            for i in range(num_targets):
-                print(f"Target {i + 1}: Prediction = {predictions[i].X}, Indicator = {binary_vars[i].X}")
-            print("Objective (Sum of Squared Errors):", model.objVal)
-
-        preds = np.array([predictions[i].X for i in range(num_targets)])
-
-        return preds
-
-
-    def calcBestSplitCustomLPCars(self, features, labels):
-        n = features.shape[0]
-        cut_id = 0
-        n_obj = 1
-        split_perf = np.zeros((n * features.shape[1], n_obj))
-        split_info = np.zeros((n * features.shape[1], 2))
-        for k in range(features.shape[1]):
-            if self.verbose:
-                print(f'Feature Index: {k}')
-            x = features.iloc[:, k].to_numpy()
-            y = labels.to_numpy()
-            sort_idx = np.argsort(x)
-            sort_x = x[sort_idx]
-            sort_y = y[sort_idx, :]
-
-            for i in range(self.min_samples_leaf, n - self.min_samples_leaf - 1):
-                xi = sort_x[i]
-                left_yi = sort_y[:i, :]
-                right_yi = sort_y[i:, :]
-
-                left_instance_count = left_yi.shape[0]
-                right_instance_count = right_yi.shape[0]
-
-                left_prediction = self.nodePredictions(left_yi, type='lp_cars_data')
-                right_prediction = self.nodePredictions(right_yi, type='lp_cars_data')
-
-                left_perf = ((left_yi - left_prediction) ** 2).mean()
-                right_perf = ((right_yi - right_prediction) ** 2).mean()
-                curr_score = (left_perf * left_instance_count + right_perf * right_instance_count) / n
-
-                split_perf[cut_id, 0] = curr_score
-                split_info[cut_id, 0] = k
-                split_info[cut_id, 1] = xi
-
-                if i < self.min_samples_leaf or xi == sort_x[i + 1]:
-                    continue
-
-                cut_id += 1
-
-        split_info = split_info[range(cut_id), :]
-        split_gain = split_perf[range(cut_id), :]
-        n_cuts = cut_id
-
-        split_info = split_info[~np.isnan(split_gain).any(axis=1),:]
-        split_gain = split_gain[~np.isnan(split_gain).any(axis=1),:]
-
-        return split_info, split_gain, n_cuts
-
-    def formulate_and_solve_lp_cars_data(self, y_data):
-        # Create model
-        import gurobipy as gp
-        from gurobipy import GRB
-
-        # Create a new Gurobi model
-        model = gp.Model("Binary and Continuous Variables")
-        model.Params.LogToConsole = 0
-
-        # Define variables
-        y = model.addVars(1, lb=0, name="y")  # Continuous variables
-        z = model.addVars(1, vtype=GRB.BINARY, name="z")  # Binary indicators
-
-        # Objective: Minimize Sum of Squared Errors (SSE)
-        sse = gp.quicksum((y[0] - y_data[i][1]) * (y[0] - y_data[i][1]) for i in range(y_data.shape[0]))
-        model.setObjective(sse, GRB.MINIMIZE)
-
-        # Constraints
-        model.addConstr(y[0] >= z[0], "y_constraint")
-        model.addConstr(y[0] <= 100000 * z[0], "y_upper_bound_constraint")
-
-        # Optimize the model
-        model.optimize()
-
-        preds = np.array([z[0].X, y[0].X])
-
-        # Display the results
-        if self.verbose:
-            print(f"Optimal Solution: {preds}")
-            print(f"Objective (Sum of Squared Errors): {model.objVal}")
-
-        return preds
-
 
 
 if __name__ == '__main__':
@@ -587,13 +487,12 @@ if __name__ == '__main__':
     ocrt_min_samples_leaf = 10
     test_set_ratio = 0.2
 
-    dataset = 'courses'
+    dataset = 'class' # class, cars
     class_target_size = 5
     base_folder = os.getcwd()
 
     if dataset == 'class':
-        split_style = 'optimal_courses'
-
+        optimization_problem = formulate_and_solve_lp_courses_data
         target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
         if class_target_size == 3:
             feature_size = 2
@@ -611,8 +510,7 @@ if __name__ == '__main__':
             features_df = full_df[feature_cols]
             targets_df = full_df[target_cols]
     else:
-        split_style = 'optimal_cars'
-
+        optimization_problem = formulate_and_solve_lp_cars_data
         full_df = pd.read_csv(f'{base_folder}/data/insurance_evaluation_data.csv').drop(columns=['INDEX']).dropna()[:500]
 
         target_cols = ['TARGET_FLAG', 'TARGET_AMT']
@@ -625,49 +523,30 @@ if __name__ == '__main__':
         features_df.loc[:, currency_cols] = features_df[currency_cols].replace('[\$,]', '', regex=True).astype(float)
 
 
-    X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df,
-                                                        test_size=test_set_ratio, shuffle=True)
+    X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df, test_size=test_set_ratio, shuffle=True)
 
-    tree = TreeForecast(max_depth=ocrt_depth, split_style=split_style, min_samples_leaf=ocrt_min_samples_leaf,
-                 min_samples_split=ocrt_min_samples_split, verbose=False)
+    tree = TreeForecast(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
+                 split_style='optimal', optimization_problem=optimization_problem, verbose=False)
     tree.fit(X_train, y_train)
 
     y_pred = tree.predict(X_test)
     print('\nOCRT MSE: ', mean_squared_error(y_test, y_pred))
-    if dataset == 'class':
-        cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print(f'Number of infeasible predictions for OCRT (Depth {ocrt_depth}): {np.sum(cumsums >= 3)}')
-    else:
-        y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
-        infeasible_rows = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for OCRT (Depth {ocrt_depth}): {infeasible_rows}')
+    calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
 
-    tree_medoid = TreeForecast(max_depth=ocrt_depth, split_style='medoid', min_samples_leaf=ocrt_min_samples_leaf,
-                        min_samples_split=ocrt_min_samples_split, verbose=False)
+    tree_medoid = TreeForecast(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf,
+                               min_samples_split=ocrt_min_samples_split, split_style='medoid', verbose=False)
 
     tree_medoid.fit(X_train, y_train)
 
     y_pred_medoid = tree_medoid.predict(X_test)
     print('\nMedoid MSE: ', mean_squared_error(y_test, y_pred_medoid))
-    if dataset == 'class':
-        cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print(f'Number of infeasible predictions for Medoid DT (Depth {ocrt_depth}): {np.sum(cumsums >= 3)}')
-    else:
-        y_pred_medoid_df = pd.DataFrame(y_pred_medoid, columns=target_cols)
-        infeasible_rows = y_pred_medoid_df[(y_pred_medoid_df['TARGET_FLAG'] == 0) & (y_pred_medoid_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for Medoid DT (Depth {ocrt_depth}): {infeasible_rows}')
+    calculate_number_of_infeasibilities(y_pred_medoid, dataset, 'Medoid DT', ocrt_depth, target_cols)
 
     regressor = DecisionTreeRegressor(random_state=20)
     regressor.fit(X_train, y_train)
     y_pred_sklearn = regressor.predict(X_test)
     print('\nDT MSE: ', mean_squared_error(y_test, y_pred_sklearn))
-    if dataset == 'class':
-        cumsums_sklearn = np.array([sum(y_pred_sklearn[i] > 0.0001) for i in range(len(y_pred_sklearn))])
-        print(f'Number of infeasible predictions for DT (Depth {ocrt_depth}): {np.sum(cumsums_sklearn >= 3)}')
-    else:
-        y_pred_sklearn_df = pd.DataFrame(y_pred_sklearn, columns=target_cols)
-        infeasible_rows = y_pred_sklearn_df[(y_pred_sklearn_df['TARGET_FLAG'] == 0) & (y_pred_sklearn_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for DT (Depth {ocrt_depth}): {infeasible_rows}')
+    calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT', ocrt_depth, target_cols)
 
     test_leaves = tree.apply(X_test)
     y_test_df = pd.DataFrame.from_dict({'instance_id': X_test.index.values, 'leaf_id': test_leaves}).set_index('instance_id')
