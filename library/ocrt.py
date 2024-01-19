@@ -3,18 +3,17 @@
 import os
 import pandas as pd
 import numpy as np
-import random
 
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-from sklearn.decomposition import PCA
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.model_selection import KFold
 
 import gurobipy as gp
 from gurobipy import GRB
@@ -88,11 +87,14 @@ def formulate_and_solve_lp_courses_data(y, verbose):
 def calculate_number_of_infeasibilities(y_pred, dataset, model, ocrt_depth, target_cols):
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-        print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {np.sum(cumsums >= 3)}')
+        nof_infeasibilities = np.sum(cumsums >= 3)
     else:
         y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
-        infeasible_rows = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
-        print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {infeasible_rows}')
+        nof_infeasibilities = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
+
+    print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {nof_infeasibilities}')
+
+    return nof_infeasibilities
 
 
 class Node:
@@ -485,13 +487,14 @@ if __name__ == '__main__':
     ocrt_depth = 15
     ocrt_min_samples_split = 20
     ocrt_min_samples_leaf = 10
-    test_set_ratio = 0.2
+    number_of_folds = 5
 
     dataset = 'class' # class, cars
     class_target_size = 5
     base_folder = os.getcwd()
 
     if dataset == 'class':
+        run_name = f'class_data_targets_{class_target_size}'
         optimization_problem = formulate_and_solve_lp_courses_data
         target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
         if class_target_size == 3:
@@ -510,6 +513,7 @@ if __name__ == '__main__':
             features_df = full_df[feature_cols]
             targets_df = full_df[target_cols]
     else:
+        run_name = 'cars_data'
         optimization_problem = formulate_and_solve_lp_cars_data
         full_df = pd.read_csv(f'{base_folder}/data/insurance_evaluation_data.csv').drop(columns=['INDEX']).dropna()[:500]
 
@@ -522,32 +526,42 @@ if __name__ == '__main__':
         currency_cols = features_df.select_dtypes('object').columns
         features_df.loc[:, currency_cols] = features_df[currency_cols].replace('[\$,]', '', regex=True).astype(float)
 
+    perf_df = pd.DataFrame()
+    kf = KFold(n_splits=number_of_folds, shuffle=True, random_state=0)
+    for cv_fold, (tr_idx, te_idx) in enumerate(kf.split(features_df)):
+        print(f'Fold: {cv_fold}')
+        X_train, y_train = features_df.iloc[tr_idx], targets_df.iloc[tr_idx]
+        X_test, y_test = features_df.iloc[te_idx], targets_df.iloc[te_idx]
 
-    X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df, test_size=test_set_ratio, shuffle=True)
+        tree = TreeForecast(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
+                     split_style='optimal', optimization_problem=optimization_problem, verbose=False)
+        tree.fit(X_train, y_train)
+        y_pred = tree.predict(X_test)
+        ocrt_mse = mean_squared_error(y_test, y_pred)
+        print(f'OCRT MSE: {ocrt_mse}')
+        ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
 
-    tree = TreeForecast(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
-                 split_style='optimal', optimization_problem=optimization_problem, verbose=False)
-    tree.fit(X_train, y_train)
+        tree_medoid = TreeForecast(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf,
+                                   min_samples_split=ocrt_min_samples_split, split_style='medoid', verbose=False)
+        tree_medoid.fit(X_train, y_train)
+        y_pred_medoid = tree_medoid.predict(X_test)
+        medoid_dt_mse = mean_squared_error(y_test, y_pred_medoid)
+        print(f'Medoid MSE: {medoid_dt_mse}')
+        medoid_dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_medoid, dataset, 'Medoid DT', ocrt_depth, target_cols)
 
-    y_pred = tree.predict(X_test)
-    print('\nOCRT MSE: ', mean_squared_error(y_test, y_pred))
-    calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
+        regressor = DecisionTreeRegressor(random_state=20)
+        regressor.fit(X_train, y_train)
+        y_pred_sklearn = regressor.predict(X_test)
+        dt_mse = mean_squared_error(y_test, y_pred_sklearn)
+        print(f'DT MSE: {dt_mse}')
+        dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT', ocrt_depth, target_cols)
 
-    tree_medoid = TreeForecast(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf,
-                               min_samples_split=ocrt_min_samples_split, split_style='medoid', verbose=False)
+        perf_df = pd.concat([perf_df, pd.DataFrame({'fold': cv_fold, 'depth': ocrt_depth, 'ocrt_min_samples_leaf': ocrt_min_samples_leaf,
+                                                    'ocrt_min_samples_split': ocrt_min_samples_split, 'ocrt_mse': ocrt_mse, 'medoid_dt_mse': medoid_dt_mse,
+                                                    'dt_mse': dt_mse, 'ocrt_nof_infeasibilities': ocrt_nof_infeasibilities,
+                                                    'medoid_dt_nof_infeasibilities': ocrt_nof_infeasibilities,
+                                                    'dt_nof_infeasibilities': ocrt_nof_infeasibilities}, index=[0])])
+        perf_df.to_csv(f'data/perf_df_{run_name}.csv', index=False)
 
-    tree_medoid.fit(X_train, y_train)
-
-    y_pred_medoid = tree_medoid.predict(X_test)
-    print('\nMedoid MSE: ', mean_squared_error(y_test, y_pred_medoid))
-    calculate_number_of_infeasibilities(y_pred_medoid, dataset, 'Medoid DT', ocrt_depth, target_cols)
-
-    regressor = DecisionTreeRegressor(random_state=20)
-    regressor.fit(X_train, y_train)
-    y_pred_sklearn = regressor.predict(X_test)
-    print('\nDT MSE: ', mean_squared_error(y_test, y_pred_sklearn))
-    calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT', ocrt_depth, target_cols)
-
-    test_leaves = tree.apply(X_test)
-    y_test_df = pd.DataFrame.from_dict({'instance_id': X_test.index.values, 'leaf_id': test_leaves}).set_index('instance_id')
-    y_test_df = pd.merge(y_test_df, y_test, left_index=True, right_index=True).sort_values('leaf_id')
+    report_cols = [x for x in perf_df.columns if (x.endswith('mse')) or (x.endswith('infeasibilities'))]
+    print(perf_df.groupby(['depth'])[report_cols].mean())
