@@ -49,7 +49,6 @@ def formulate_and_solve_lp_cars_data(y, verbose, bigM=100000):
 
     return preds
 
-
 def formulate_and_solve_lp_courses_data(y, verbose):
     num_targets = y.shape[1]
 
