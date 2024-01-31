@@ -100,7 +100,6 @@ def formulate_and_solve_new_class_data(y, verbose):
     model.setObjective(sse, GRB.MINIMIZE)
 
     # Create constraints
-    model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
     for i in range(num_targets):
         model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
     
@@ -527,7 +526,7 @@ class TreeForecast:
 
 
 if __name__ == '__main__':
-    ocrt_depth = 20
+    ocrt_depth = 5
     ocrt_min_samples_split = 20
     ocrt_min_samples_leaf = 10
     number_of_folds = 2
