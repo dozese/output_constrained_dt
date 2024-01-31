@@ -527,10 +527,10 @@ class TreeForecast:
 
 
 if __name__ == '__main__':
-    ocrt_depth = 15
+    ocrt_depth = 20
     ocrt_min_samples_split = 20
     ocrt_min_samples_leaf = 10
-    number_of_folds = 3
+    number_of_folds = 2
 
     dataset = 'newclass'
 
