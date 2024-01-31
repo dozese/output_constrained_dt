@@ -526,9 +526,10 @@ class TreeForecast:
 
 
 if __name__ == '__main__':
-    ocrt_depth = 5
-    ocrt_min_samples_split = 20
-    ocrt_min_samples_leaf = 10
+    ocrt_depth = 12
+    # Bu iki degeri sırasıyla 2 ve 1 yapınca hata veriyor
+    ocrt_min_samples_split = 5 
+    ocrt_min_samples_leaf = 5
     number_of_folds = 2
 
     dataset = 'newclass'
@@ -615,13 +616,13 @@ if __name__ == '__main__':
         y_pred_sklearn = regressor.predict(X_test)
         dt_mse = mean_squared_error(y_test, y_pred_sklearn)
         print(f'DT MSE: {dt_mse}')
-        dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT', ocrt_depth, target_cols)
+        dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT', regressor.get_depth(), target_cols)
 
         perf_df = pd.concat([perf_df, pd.DataFrame({'fold': cv_fold, 'depth': ocrt_depth, 'ocrt_min_samples_leaf': ocrt_min_samples_leaf,
                                                     'ocrt_min_samples_split': ocrt_min_samples_split, 'ocrt_mse': ocrt_mse, 'medoid_dt_mse': medoid_dt_mse,
                                                     'dt_mse': dt_mse, 'ocrt_nof_infeasibilities': ocrt_nof_infeasibilities,
                                                     'medoid_dt_nof_infeasibilities': ocrt_nof_infeasibilities,
-                                                    'dt_nof_infeasibilities': ocrt_nof_infeasibilities}, index=[0])])
+                                                    'dt_nof_infeasibilities': dt_nof_infeasibilities}, index=[0])])
         perf_df.to_csv(f'data/perf_df_{run_name}.csv', index=False)
 
     report_cols = [x for x in perf_df.columns if (x.endswith('mse')) or (x.endswith('infeasibilities'))]
