@@ -83,10 +83,54 @@ def formulate_and_solve_lp_courses_data(y, verbose):
 
     return preds
 
+def formulate_and_solve_new_class_data(y, verbose):
+    num_targets = y.shape[1]
+
+    # Create model
+    model = gp.Model("Minimize SSE")
+    if not verbose:
+        model.Params.LogToConsole = 0
+
+    # Create decision variables
+    predictions = model.addVars(num_targets, lb=0, ub=100, name="y")
+    binary_vars = model.addVars(num_targets, vtype=GRB.BINARY, name="z")
+
+    # Create objective function
+    sse = gp.quicksum((predictions[i] - y[i][j]) * (predictions[i] - y[i][j]) for i in range(num_targets) for j in range(len(y[i])))
+    model.setObjective(sse, GRB.MINIMIZE)
+
+    # Create constraints
+    model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
+    for i in range(num_targets):
+        model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
+    
+    model.addConstr(predictions[1] >= 50 * binary_vars[2], "y_constraint_1")
+    model.addConstr(predictions[1] + predictions[2] >= 110 * binary_vars[0], "y_constraint_2")
+
+    # Solve the problem
+    model.optimize()
+
+    if verbose:
+        print("Optimal Solution:")
+        for i in range(num_targets):
+            print(f"Target {i + 1}: Prediction = {predictions[i].X}, Indicator = {binary_vars[i].X}")
+        print("Objective (Sum of Squared Errors):", model.objVal)
+
+    preds = np.array([predictions[i].X for i in range(num_targets)])
+
+    return preds
+
 def calculate_number_of_infeasibilities(y_pred, dataset, model, ocrt_depth, target_cols):
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
         nof_infeasibilities = np.sum(cumsums >= 3)
+    elif dataset == 'newclass':
+        nof_infeasibilities = 0
+        for i in range(len(y_pred)):
+            if (y_pred[i][1] < 50) and (y_pred[i][2] > 0.0001):
+                nof_infeasibilities += 1
+            elif (y_pred[i][1] + y_pred[i][2] < 110) and (y_pred[i][0] > 0.0001):
+                nof_infeasibilities += 1
     else:
         y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
         nof_infeasibilities = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
@@ -486,12 +530,15 @@ if __name__ == '__main__':
     ocrt_depth = 15
     ocrt_min_samples_split = 20
     ocrt_min_samples_leaf = 10
-    number_of_folds = 5
+    number_of_folds = 3
 
-    dataset = 'class' # class, cars
+    dataset = 'newclass'
+
+    # dataset = 'class' # class, cars
     class_target_size = 5
+    
     base_folder = os.getcwd()
-
+    
     if dataset == 'class':
         run_name = f'class_data_targets_{class_target_size}'
         optimization_problem = formulate_and_solve_lp_courses_data
@@ -511,6 +558,17 @@ if __name__ == '__main__':
 
             features_df = full_df[feature_cols]
             targets_df = full_df[target_cols]
+    elif dataset == 'newclass':
+        run_name = 'newclass_data'
+        optimization_problem = formulate_and_solve_new_class_data
+        feature_cols = ['gender', 'race/ethnicity', 'parental level of education',
+                        'lunch', 'test preparation course']
+        target_cols = ['math score', 'reading score', 'writing score']
+
+        full_df = pd.read_csv(f'{base_folder}/data/constrained_exams.csv')
+
+        features_df = full_df[feature_cols]
+        targets_df = full_df[target_cols]
     else:
         run_name = 'cars_data'
         optimization_problem = formulate_and_solve_lp_cars_data
@@ -529,6 +587,11 @@ if __name__ == '__main__':
     kf = KFold(n_splits=number_of_folds, shuffle=True, random_state=0)
     for cv_fold, (tr_idx, te_idx) in enumerate(kf.split(features_df)):
         print(f'Fold: {cv_fold}')
+        
+        # One-hot encoding for categorical features
+        if dataset == 'newclass':
+            features_df =  pd.get_dummies(features_df, columns=features_df.columns, drop_first=True, dtype=int)
+
         X_train, y_train = features_df.iloc[tr_idx], targets_df.iloc[tr_idx]
         X_test, y_test = features_df.iloc[te_idx], targets_df.iloc[te_idx]
 
