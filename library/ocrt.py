@@ -10,7 +10,6 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import euclidean_distances
@@ -19,6 +18,20 @@ from sklearn.model_selection import KFold
 import gurobipy as gp
 from gurobipy import GRB
 
+def return_medoid(y):
+    return y[np.argmin(euclidean_distances(y).mean(axis=1))]
+
+def return_mean(y):
+    return np.asarray(y.mean(axis=0))
+
+def calculate_mse(y, predictions):
+    return ((y - predictions) ** 2).mean()
+
+def calculate_mad(y, predictions):
+    return np.mean(np.abs(y - predictions))
+
+def calculate_poisson_deviance(y, predictions):
+    return 2 * np.sum(predictions - y - y * np.log(predictions / y))
 
 def formulate_and_solve_lp_cars_data(y, verbose, bigM=100000):
     # Create a new Gurobi model
@@ -70,7 +83,7 @@ def formulate_and_solve_lp_courses_data(y, verbose):
     # Create constraints
     model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
     for i in range(num_targets):
-        model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
+        model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
 
     # Solve the problem
     model.optimize()
@@ -85,7 +98,10 @@ def formulate_and_solve_lp_courses_data(y, verbose):
 
     return preds
 
-def formulate_and_solve_new_class_data(y, verbose):
+def formulate_and_solve_lp_forecasting_data(y, verbose):
+    pass
+
+def formulate_and_solve_lp_new_class_data(y, verbose):
     num_instances = y.shape[0]
     num_targets = y.shape[1]
 
@@ -104,7 +120,7 @@ def formulate_and_solve_new_class_data(y, verbose):
 
     # Create constraints
     for i in range(num_targets):
-        model.addConstr(predictions[i] <= 100 * binary_vars[i], f"z_relationship_{i}")
+        model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
     
     model.addConstr(predictions[1] >= 50 * binary_vars[2], "y_constraint_1")
     model.addConstr(predictions[1] + predictions[2] >= 110 * binary_vars[0], "y_constraint_2")
@@ -141,6 +157,22 @@ def calculate_number_of_infeasibilities(y_pred, dataset, model, ocrt_depth, targ
 
     return nof_infeasibilities
 
+def split_criteria_with_methods(y, prediction_method, evaluation_method, optimization_problem, verbose=False):
+    if prediction_method == 'medoid':
+        predictions = return_medoid(y)
+    elif prediction_method == 'optimal':
+        predictions = optimization_problem(y, verbose)
+    else:
+        predictions = return_mean(y)
+
+    if evaluation_method == 'mse':
+        split_evaluation = calculate_mse(y, predictions)
+    elif evaluation_method == 'mad':
+        split_evaluation = calculate_mad(y, predictions)
+    else:
+        split_evaluation = calculate_poisson_deviance(y, predictions)
+
+    return predictions, split_evaluation
 
 class Node:
     """
@@ -219,21 +251,19 @@ class OCDT:
         calcBestSplitCustom(features, labels):
             Calculates the best custom split for features and labels.
     """
-    def __init__(self,
-                 max_depth = 5,
+    def __init__(self, max_depth = 5,
                  min_samples_leaf = 5,
                  min_samples_split = 10,
-                 split_style = None,
-                 optimization_problem = None,
+                 split_criteria = None,
+                 leaf_prediction_method = None,
                  ocrt_solve_only_leaves = False,
-                 verbose = False
-                 ):
+                 verbose = False):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
-        self.split_style = split_style
-        self.optimization_problem = optimization_problem
+        self.split_criteria = split_criteria
         self.ocrt_solve_only_leaves = ocrt_solve_only_leaves
+        self.leaf_prediction_method = leaf_prediction_method
         self.verbose = verbose
         self.Tree = None
 
@@ -246,7 +276,7 @@ class OCDT:
             labels (pandas.DataFrame): The labels or target variables corresponding to the features.
             node (Node): The current node in the tree being built.
         """
-        node.prediction = self.nodePredictions(labels.to_numpy(), self.split_style)
+        node.prediction, _ = self.split_criteria(labels.to_numpy())
 
         node.count = labels.shape[0]
         if node.depth >= self.max_depth:
@@ -260,28 +290,18 @@ class OCDT:
         current_label = range(labels.shape[1])
         target = labels
 
-        if self.split_style in ['medoid', 'optimal']:
-            split_info, split_gain, n_cuts = self.calcBestSplitCustom(features, target)
+        split_info, split_gain, n_cuts = self.calcBestSplitCustom(features, target)
 
-            if n_cuts == 0:
-                node.is_terminal = True
-                return
+        if n_cuts == 0:
+            node.is_terminal = True
+            return
 
-            min_max_scaler = preprocessing.MinMaxScaler()
-            split_gain_scaled_total = min_max_scaler.fit_transform(split_gain)[:, 0]
-            mean_rank_sort = np.argsort(split_gain_scaled_total)
+        min_max_scaler = preprocessing.MinMaxScaler()
+        split_gain_scaled_total = min_max_scaler.fit_transform(split_gain)[:, 0]
+        mean_rank_sort = np.argsort(split_gain_scaled_total)
 
-            splitCol = int(split_info[mean_rank_sort[0], 0])
-            thresh = split_info[mean_rank_sort[0], 1]
-        else:
-            splitCol, thresh = self.calcBestSplit(features, target, current_label)
-
-            labels_left = labels.loc[features.iloc[:, splitCol] <= thresh, :]
-            labels_right = labels.loc[features.iloc[:, splitCol] > thresh, :]
-
-            if (labels_left.shape[0] == 0) or (labels_right.shape[0] == 0):
-                node.is_terminal = True
-                return
+        splitCol = int(split_info[mean_rank_sort[0], 0])
+        thresh = split_info[mean_rank_sort[0], 1]
 
         node.column = splitCol
         node.column_name = features.columns[splitCol]
@@ -319,19 +339,14 @@ class OCDT:
         self.Tree = Node()
         self.Tree.depth = 0
         self.Tree.id = 1
-        if self.ocrt_solve_only_leaves:
-            split_style_input = self.split_style
-            self.split_style = 'sklearn'
-            self.buildDT(features, labels, self.Tree)
-            leaves = self.apply(features)
-            leaf_predictions = {}
-            for leaf_id in np.unique(leaves):
-                leaf_indices = np.where(leaves == leaf_id)[0]
-                leaf_labels = labels.iloc[leaf_indices].to_numpy()
-                leaf_predictions[leaf_id] = self.nodePredictions(leaf_labels, split_style_input)
-            self.leaf_predictions_df = pd.DataFrame(leaf_predictions)
-        else:
-            self.buildDT(features, labels, self.Tree)
+        self.buildDT(features, labels, self.Tree)
+        leaves = self.apply(features)
+        leaf_predictions = {}
+        for leaf_id in np.unique(leaves):
+            leaf_indices = np.where(leaves == leaf_id)[0]
+            leaf_labels = labels.iloc[leaf_indices].to_numpy()
+            leaf_predictions[leaf_id], _ = self.leaf_prediction_method(leaf_labels)
+        self.leaf_predictions_df = pd.DataFrame(leaf_predictions)
         end = time.time()
         self.training_duration = end-start
 
@@ -339,11 +354,9 @@ class OCDT:
         '''
         Returns the labels for each X
         '''
-        if self.ocrt_solve_only_leaves:
-            leaves = self.apply(features)
-            predictions = self.leaf_predictions_df[leaves].T
-        else:
-            predictions = [self.predictSample(features.loc[i], self.max_depth, self.Tree) for i in features.index]
+        leaves = self.apply(features)
+        predictions = self.leaf_predictions_df[leaves].T
+
         return np.asarray(predictions)
 
     def predictSample(self, features, depth, node):
@@ -365,42 +378,6 @@ class OCDT:
             predicted = self.predictSample(features, depth, node.left)
 
         return predicted
-
-    def nodePredictions(self, y, split_style):
-        """
-        Calculate predictions for a node as the mean.
-
-        Args:
-            y (numpy.ndarray): The labels or target variables for a node.
-
-        Returns:
-            predictions (numpy.ndarray): Predictions for the node, which represent the mean of target variables.
-        """
-        if split_style == 'medoid':
-            predictions = y[self.find_medoids(y)]
-        elif split_style == 'optimal':
-            predictions = self.optimization_problem(y, self.verbose)
-        else:
-            if len(y) == 0:
-                print(y)
-            predictions = np.asarray(y.mean(axis=0))
-
-        return predictions
-
-
-    def find_medoids(self, yi):
-        """
-        Find the index of medoid.
-
-        Args:
-            yi (numpy.ndarray): Matrix containing data.
-
-        Returns:
-            int: Index of the medoid
-        """
-        yi_dist = euclidean_distances(yi)
-
-        return np.argmin(yi_dist.mean(axis=1))
 
     def applySample(self, features, depth, node):
         """
@@ -482,33 +459,6 @@ class OCDT:
 
         return rules
 
-    def calcBestSplit(self, features, labels, current_label):
-        """
-        Calculates the best split based on features and labels.
-
-        Args:
-            features (pandas.DataFrame): The input features for a single object.
-            labels (pandas.DataFrame): The labels or target variables corresponding to the features.
-            current_label (int): The index of the current target variable.
-
-        Returns:
-            split_col (int): The column index for the best split.
-            threshold (float): The threshold for the best split.
-        """
-        bdc = DecisionTreeRegressor(
-            random_state=0,
-            criterion="squared_error",
-            max_depth=1,
-            min_samples_split=self.min_samples_split,
-            min_samples_leaf=self.min_samples_leaf
-        )
-        bdc.fit(features, labels.iloc[:, current_label])
-
-        threshold = bdc.tree_.threshold[0]
-        split_col = bdc.tree_.feature[0]
-
-        return split_col, threshold
-
     def calcBestSplitCustom(self, features, labels):
         n = features.shape[0]
         cut_id = 0
@@ -532,11 +482,8 @@ class OCDT:
                 left_instance_count = left_yi.shape[0]
                 right_instance_count = right_yi.shape[0]
 
-                left_prediction = self.nodePredictions(left_yi, self.split_style)
-                right_prediction = self.nodePredictions(right_yi, self.split_style)
-
-                left_perf = ((left_yi - left_prediction) ** 2).mean()
-                right_perf = ((right_yi - right_prediction) ** 2).mean()
+                left_prediction, left_perf = self.split_criteria(left_yi)
+                right_prediction, right_perf = self.split_criteria(right_yi)
                 curr_score = (left_perf * left_instance_count + right_perf * right_instance_count) / n
 
                 split_perf[cut_id, 0] = curr_score
@@ -560,21 +507,27 @@ class OCDT:
 
 if __name__ == '__main__':
     base_folder = os.getcwd()
-    # Bu iki degeri sırasıyla 2 ve 1 yapınca hata veriyor
     ocrt_min_samples_split = 10
     ocrt_min_samples_leaf = 5
     number_of_folds = 5
 
     ocrt_depth = 12
 
-    # dataset = 'class' # class, cars, newclass
+    # dataset = 'class' # class, cars, newclass, forecasting
     dataset = 'newclass'
+    verbose = False
     class_target_size = 5
+    prediction_method = 'mean' # mean, medoid, optimal
+    prediction_method_leaf = 'medoid'  # mean, medoid, optimal
+    evaluation_method = 'mse' # mse, mad, poisson
+
+    evaluation_method_list = ['mse']
+    prediction_method_leaf_list = ['optimal', 'medoid']
+    prediction_method_list = ['mean', 'medoid', 'optimal']
 
     perf_df = pd.DataFrame()
 
     if dataset == 'class':
-        run_name = f'class_data_targets_{class_target_size}'
         optimization_problem = formulate_and_solve_lp_courses_data
         target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
         if class_target_size == 3:
@@ -592,9 +545,16 @@ if __name__ == '__main__':
 
             features_df = full_df[feature_cols]
             targets_df = full_df[target_cols]
+    elif dataset == 'forecasting':
+        optimization_problem = formulate_and_solve_lp_forecasting_data
+        full_df = pd.read_csv(f'{base_folder}/data/forecasting.csv')
+        feature_cols = [f'Feature {id + 1}' for id in range(X.shape[1])]
+        target_cols = [f'Target {id + 1}' for id in range(y.shape[1])]
+
+        features_df = full_df[feature_cols]
+        targets_df = full_df[target_cols]
     elif dataset == 'newclass':
-        run_name = 'newclass_data'
-        optimization_problem = formulate_and_solve_new_class_data
+        optimization_problem = formulate_and_solve_lp_new_class_data
         feature_cols = ['gender', 'race/ethnicity', 'parental level of education',
                         'lunch', 'test preparation course']
         target_cols = ['math score', 'reading score', 'writing score']
@@ -604,7 +564,6 @@ if __name__ == '__main__':
         features_df = full_df[feature_cols]
         targets_df = full_df[target_cols]
     else:
-        run_name = 'cars_data'
         optimization_problem = formulate_and_solve_lp_cars_data
         full_df = pd.read_csv(f'{base_folder}/data/insurance_evaluation_data.csv').drop(columns=['INDEX']).dropna()[:500]
 
@@ -628,65 +587,54 @@ if __name__ == '__main__':
         X_train, y_train = features_df.iloc[tr_idx], targets_df.iloc[tr_idx]
         X_test, y_test = features_df.iloc[te_idx], targets_df.iloc[te_idx]
 
-        tree = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
-                     split_style='optimal', optimization_problem=optimization_problem, ocrt_solve_only_leaves=False, verbose=False)
-        tree.fit(X_train, y_train)
-        y_pred = tree.predict(X_test)
-        ocrt_mse = mean_squared_error(y_test, y_pred)
-        print(f'OCRT MSE: {ocrt_mse}')
-        ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
-
-        tree_only_leaves = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
-                    split_style='optimal', optimization_problem=optimization_problem, ocrt_solve_only_leaves=True, verbose=False)
-        tree_only_leaves.fit(X_train, y_train)
-        y_pred_only_leaves = tree_only_leaves.predict(X_test)
-        ocrt_only_leaves_mse = mean_squared_error(y_test, y_pred_only_leaves)
-        print(f'OCRT Only Leaves MSE: {ocrt_only_leaves_mse}')
-        ocrt_only_leaves_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_only_leaves, dataset,
-                                                                       'OCRT Only Leaves', ocrt_depth, target_cols)
-
-        tree_medoid = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
-                           split_style='medoid', ocrt_solve_only_leaves=False, verbose=False)
-        tree_medoid.fit(X_train, y_train)
-        y_pred_medoid = tree_medoid.predict(X_test)
-        medoid_dt_mse = mean_squared_error(y_test, y_pred_medoid)
-        print(f'Medoid MSE: {medoid_dt_mse}')
-        medoid_dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_medoid, dataset, 'Medoid DT', ocrt_depth, target_cols)
-
-        tree_medoid_only_leaves = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf,
-                min_samples_split=ocrt_min_samples_split, split_style='medoid', ocrt_solve_only_leaves=True, verbose=False)
-        tree_medoid_only_leaves.fit(X_train, y_train)
-        y_pred_medoid_only_leaves = tree_medoid_only_leaves.predict(X_test)
-        medoid_dt_only_leaves_mse = mean_squared_error(y_test, y_pred_medoid_only_leaves)
-        print(f'Medoid Only Leaves MSE: {medoid_dt_only_leaves_mse}')
-        medoid_dt_only_leaves_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_medoid_only_leaves,
-                                                                dataset, 'Medoid Only Leaves DT', ocrt_depth, target_cols)
-
-        regressor = DecisionTreeRegressor(random_state=20)
+        regressor = DecisionTreeRegressor(random_state=20, min_samples_leaf=ocrt_min_samples_leaf,
+                                          min_samples_split=ocrt_min_samples_split, max_depth=ocrt_depth)
         start = time.time()
         regressor.fit(X_train, y_train)
         end = time.time()
         y_pred_sklearn = regressor.predict(X_test)
         dt_mse = mean_squared_error(y_test, y_pred_sklearn)
         print(f'DT MSE: {dt_mse}')
-        dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT', regressor.get_depth(), target_cols)
+        dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT',
+                                                                     regressor.get_depth(), target_cols)
 
         perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
-                                                    'ocrt_min_samples_leaf': ocrt_min_samples_leaf,
-                                                    'ocrt_min_samples_split': ocrt_min_samples_split, 'ocrt_mse': ocrt_mse,
-                                                    'ocrt_only_leaves_mse': ocrt_only_leaves_mse, 'medoid_dt_mse': medoid_dt_mse,
-                                                    'medoid_dt_only_leaves_mse': medoid_dt_only_leaves_mse, 'dt_mse': dt_mse,
-                                                    'ocrt_nof_infeasibilities': ocrt_nof_infeasibilities,
-                                                    'ocrt_only_leaves_nof_infeasibilities': ocrt_only_leaves_nof_infeasibilities,
-                                                    'medoid_dt_nof_infeasibilities': ocrt_nof_infeasibilities,
-                                                    'medoid_dt_only_leaves_nof_infeasibilities': medoid_dt_only_leaves_nof_infeasibilities,
-                                                    'dt_nof_infeasibilities': dt_nof_infeasibilities,
-                                                    'ocrt_training_duration': tree.training_duration,
-                                                    'ocrt_only_leaves_training_duration': tree_only_leaves.training_duration,
-                                                    'medoid_dt_training_duration': tree_medoid.training_duration,
-                                                    'medoid_dt_only_leaves_training_duration': tree_medoid_only_leaves.training_duration,
-                                                    'dt_training_duration': end-start}, index=[0])])
-        perf_df.to_csv(f'data/perf_df_{dataset}.csv', index=False)
+                                                    'min_samples_leaf': ocrt_min_samples_leaf,
+                                                    'min_samples_split': ocrt_min_samples_split,
+                                                    'prediction_method': 'sklearn',
+                                                    'prediction_method_leaf': 'sklearn',
+                                                    'evaluation_method': 'sklearn',
+                                                    'mse': dt_mse, 'nof_infeasibilities': dt_nof_infeasibilities,
+                                                    'training_duration': end - start}, index=[0])])
+
+        for evaluation_method in evaluation_method_list:
+            for prediction_method in prediction_method_list:
+                for prediction_method_leaf in prediction_method_leaf_list:
+                    print("==============")
+                    print(f'Evaluation: {evaluation_method}')
+                    print(f'Split Prediction: {prediction_method}')
+                    print(f'Leaf Prediction: {prediction_method_leaf}')
+
+                    split_criteria = lambda y: split_criteria_with_methods(y, prediction_method, evaluation_method, optimization_problem, verbose)
+                    leaf_prediction_method = lambda y: split_criteria_with_methods(y, prediction_method_leaf, evaluation_method, optimization_problem, verbose)
+
+                    tree = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
+                                 split_criteria=split_criteria, leaf_prediction_method=leaf_prediction_method, verbose=verbose)
+                    tree.fit(X_train, y_train)
+                    y_pred = tree.predict(X_test)
+                    ocrt_mse = mean_squared_error(y_test, y_pred)
+                    print(f'OCRT MSE: {ocrt_mse}')
+                    ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
+
+                    perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
+                                                                'min_samples_leaf': ocrt_min_samples_leaf,
+                                                                'min_samples_split': ocrt_min_samples_split,
+                                                                'prediction_method': prediction_method,
+                                                                'prediction_method_leaf': prediction_method_leaf,
+                                                                'evaluation_method': evaluation_method,
+                                                                'mse': ocrt_mse, 'nof_infeasibilities': ocrt_nof_infeasibilities,
+                                                                'training_duration': tree.training_duration}, index=[0])])
+                    perf_df.to_csv(f'data/perf_df_{dataset}_new_code.csv', index=False)
 
     plot_results = False
     if plot_results:
