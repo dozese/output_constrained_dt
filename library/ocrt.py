@@ -121,7 +121,7 @@ def formulate_and_solve_lp_new_class_data(y, verbose):
     # Create constraints
     for i in range(num_targets):
         model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
-    
+
     model.addConstr(predictions[1] >= 50 * binary_vars[2], "y_constraint_1")
     model.addConstr(predictions[1] + predictions[2] >= 110 * binary_vars[0], "y_constraint_2")
 
@@ -511,8 +511,6 @@ if __name__ == '__main__':
     ocrt_min_samples_leaf = 5
     number_of_folds = 5
 
-    ocrt_depth = 12
-
     # dataset = 'class' # class, cars, newclass, forecasting
     dataset = 'newclass'
     verbose = False
@@ -521,120 +519,126 @@ if __name__ == '__main__':
     prediction_method_leaf = 'medoid'  # mean, medoid, optimal
     evaluation_method = 'mse' # mse, mad, poisson
 
+    ocrt_depth_list = [12]
+    dataset_list = ['newclass', 'class', 'cars']
     evaluation_method_list = ['mse']
     prediction_method_leaf_list = ['optimal', 'medoid']
     prediction_method_list = ['mean', 'medoid', 'optimal']
 
-    perf_df = pd.DataFrame()
+    for ocrt_depth in ocrt_depth_list:
+        for dataset in dataset_list:
+            perf_df = pd.DataFrame()
 
-    if dataset == 'class':
-        optimization_problem = formulate_and_solve_lp_courses_data
-        target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
-        if class_target_size == 3:
-            feature_size = 2
-            feature_cols = [f'Feature{id + 1}' for id in range(feature_size)]
-            full_df = pd.read_csv(f'{base_folder}/data/full_df_size_300_targets_3.csv')
+            if dataset == 'class':
+                optimization_problem = formulate_and_solve_lp_courses_data
+                target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
+                if class_target_size == 3:
+                    feature_size = 2
+                    feature_cols = [f'Feature{id + 1}' for id in range(feature_size)]
+                    full_df = pd.read_csv(f'{base_folder}/data/full_df_size_300_targets_3.csv')
 
-            features_df = full_df[feature_cols]
-            targets_df = full_df[target_cols]
-        else:
-            feature_cols = ['EnrolledElectiveBefore', 'GradeAvgFromPreviousElective',
-                            'Grade', 'Major', 'Class', 'GradePerm']
+                    features_df = full_df[feature_cols]
+                    targets_df = full_df[target_cols]
+                else:
+                    feature_cols = ['EnrolledElectiveBefore', 'GradeAvgFromPreviousElective',
+                                    'Grade', 'Major', 'Class', 'GradePerm']
 
-            full_df = pd.read_csv(f'{base_folder}/data/full_df_size_1000_targets_5.csv')
+                    full_df = pd.read_csv(f'{base_folder}/data/full_df_size_1000_targets_5.csv')
 
-            features_df = full_df[feature_cols]
-            targets_df = full_df[target_cols]
-    elif dataset == 'forecasting':
-        optimization_problem = formulate_and_solve_lp_forecasting_data
-        full_df = pd.read_csv(f'{base_folder}/data/forecasting.csv')
-        feature_cols = [f'Feature {id + 1}' for id in range(X.shape[1])]
-        target_cols = [f'Target {id + 1}' for id in range(y.shape[1])]
+                    features_df = full_df[feature_cols]
+                    targets_df = full_df[target_cols]
+            elif dataset == 'forecasting':
+                optimization_problem = formulate_and_solve_lp_forecasting_data
+                full_df = pd.read_csv(f'{base_folder}/data/forecasting.csv')
+                feature_cols = [f'Feature {id + 1}' for id in range(X.shape[1])]
+                target_cols = [f'Target {id + 1}' for id in range(y.shape[1])]
 
-        features_df = full_df[feature_cols]
-        targets_df = full_df[target_cols]
-    elif dataset == 'newclass':
-        optimization_problem = formulate_and_solve_lp_new_class_data
-        feature_cols = ['gender', 'race/ethnicity', 'parental level of education',
-                        'lunch', 'test preparation course']
-        target_cols = ['math score', 'reading score', 'writing score']
+                features_df = full_df[feature_cols]
+                targets_df = full_df[target_cols]
+            elif dataset == 'newclass':
+                optimization_problem = formulate_and_solve_lp_new_class_data
+                feature_cols = ['gender', 'race/ethnicity', 'parental level of education',
+                                'lunch', 'test preparation course']
+                target_cols = ['math score', 'reading score', 'writing score']
 
-        full_df = pd.read_csv(f'{base_folder}/data/constrained_exams.csv')
+                full_df = pd.read_csv(f'{base_folder}/data/constrained_exams.csv')
 
-        features_df = full_df[feature_cols]
-        targets_df = full_df[target_cols]
-    else:
-        optimization_problem = formulate_and_solve_lp_cars_data
-        full_df = pd.read_csv(f'{base_folder}/data/insurance_evaluation_data.csv').drop(columns=['INDEX']).dropna()[:500]
+                features_df = full_df[feature_cols]
+                targets_df = full_df[target_cols]
+            else:
+                optimization_problem = formulate_and_solve_lp_cars_data
+                full_df = pd.read_csv(f'{base_folder}/data/insurance_evaluation_data.csv').drop(columns=['INDEX']).dropna()[:500]
 
-        target_cols = ['TARGET_FLAG', 'TARGET_AMT']
-        targets_df = full_df[target_cols]
+                target_cols = ['TARGET_FLAG', 'TARGET_AMT']
+                targets_df = full_df[target_cols]
 
-        feature_cols = ['KIDSDRIV', 'AGE', 'HOMEKIDS', 'YOJ', 'INCOME', 'HOME_VAL', 'TRAVTIME',
-                        'BLUEBOOK', 'TIF', 'OLDCLAIM', 'CLM_FREQ', 'MVR_PTS', 'CAR_AGE']
-        features_df = full_df[feature_cols]
-        currency_cols = features_df.select_dtypes('object').columns
-        features_df.loc[:, currency_cols] = features_df[currency_cols].replace('[\$,]', '', regex=True).astype(float)
+                feature_cols = ['KIDSDRIV', 'AGE', 'HOMEKIDS', 'YOJ', 'INCOME', 'HOME_VAL', 'TRAVTIME',
+                                'BLUEBOOK', 'TIF', 'OLDCLAIM', 'CLM_FREQ', 'MVR_PTS', 'CAR_AGE']
+                features_df = full_df[feature_cols]
+                currency_cols = features_df.select_dtypes('object').columns
+                features_df.loc[:, currency_cols] = features_df[currency_cols].replace('[\$,]', '', regex=True).astype(float)
 
-    kf = KFold(n_splits=number_of_folds, shuffle=True, random_state=0)
-    for cv_fold, (tr_idx, te_idx) in enumerate(kf.split(features_df)):
-        print(f'Fold: {cv_fold}')
+            kf = KFold(n_splits=number_of_folds, shuffle=True, random_state=0)
+            for cv_fold, (tr_idx, te_idx) in enumerate(kf.split(features_df)):
+                print(f'Fold: {cv_fold}')
 
-        # One-hot encoding for categorical features
-        if dataset == 'newclass':
-            features_df = pd.get_dummies(features_df, columns=features_df.columns, drop_first=True, dtype=int)
+                # One-hot encoding for categorical features
+                if dataset in ['newclass']:
+                    features_df = pd.get_dummies(features_df, columns=features_df.columns, drop_first=True, dtype=int)
 
-        X_train, y_train = features_df.iloc[tr_idx], targets_df.iloc[tr_idx]
-        X_test, y_test = features_df.iloc[te_idx], targets_df.iloc[te_idx]
+                X_train, y_train = features_df.iloc[tr_idx], targets_df.iloc[tr_idx]
+                X_test, y_test = features_df.iloc[te_idx], targets_df.iloc[te_idx]
 
-        regressor = DecisionTreeRegressor(random_state=20, min_samples_leaf=ocrt_min_samples_leaf,
-                                          min_samples_split=ocrt_min_samples_split, max_depth=ocrt_depth)
-        start = time.time()
-        regressor.fit(X_train, y_train)
-        end = time.time()
-        y_pred_sklearn = regressor.predict(X_test)
-        dt_mse = mean_squared_error(y_test, y_pred_sklearn)
-        print(f'DT MSE: {dt_mse}')
-        dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT',
-                                                                     regressor.get_depth(), target_cols)
+                regressor = DecisionTreeRegressor(random_state=20, min_samples_leaf=ocrt_min_samples_leaf,
+                                                  min_samples_split=ocrt_min_samples_split, max_depth=ocrt_depth)
+                start = time.time()
+                regressor.fit(X_train, y_train)
+                end = time.time()
+                y_pred_sklearn = regressor.predict(X_test)
+                dt_mse = mean_squared_error(y_test, y_pred_sklearn)
+                print(f'DT MSE: {dt_mse}')
+                dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT',
+                                                                             regressor.get_depth(), target_cols)
 
-        perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
-                                                    'min_samples_leaf': ocrt_min_samples_leaf,
-                                                    'min_samples_split': ocrt_min_samples_split,
-                                                    'prediction_method': 'sklearn',
-                                                    'prediction_method_leaf': 'sklearn',
-                                                    'evaluation_method': 'sklearn',
-                                                    'mse': dt_mse, 'nof_infeasibilities': dt_nof_infeasibilities,
-                                                    'training_duration': end - start}, index=[0])])
+                perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
+                                                            'min_samples_leaf': ocrt_min_samples_leaf,
+                                                            'min_samples_split': ocrt_min_samples_split,
+                                                            'prediction_method': 'sklearn',
+                                                            'prediction_method_leaf': 'sklearn',
+                                                            'evaluation_method': 'sklearn',
+                                                            'mse': dt_mse, 'nof_infeasibilities': dt_nof_infeasibilities,
+                                                            'training_duration': end - start}, index=[0])])
 
-        for evaluation_method in evaluation_method_list:
-            for prediction_method in prediction_method_list:
-                for prediction_method_leaf in prediction_method_leaf_list:
-                    print("==============")
-                    print(f'Evaluation: {evaluation_method}')
-                    print(f'Split Prediction: {prediction_method}')
-                    print(f'Leaf Prediction: {prediction_method_leaf}')
+                for evaluation_method in evaluation_method_list:
+                    for prediction_method in prediction_method_list:
+                        for prediction_method_leaf in prediction_method_leaf_list:
+                            print("==============")
+                            print(f'Evaluation: {evaluation_method}')
+                            print(f'Split Prediction: {prediction_method}')
+                            print(f'Leaf Prediction: {prediction_method_leaf}')
 
-                    split_criteria = lambda y: split_criteria_with_methods(y, prediction_method, evaluation_method, optimization_problem, verbose)
-                    leaf_prediction_method = lambda y: split_criteria_with_methods(y, prediction_method_leaf, evaluation_method, optimization_problem, verbose)
+                            split_criteria = lambda y: split_criteria_with_methods(y, prediction_method, evaluation_method, optimization_problem, verbose)
+                            leaf_prediction_method = lambda y: split_criteria_with_methods(y, prediction_method_leaf, evaluation_method, optimization_problem, verbose)
 
-                    tree = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
-                                 split_criteria=split_criteria, leaf_prediction_method=leaf_prediction_method, verbose=verbose)
-                    tree.fit(X_train, y_train)
-                    y_pred = tree.predict(X_test)
-                    ocrt_mse = mean_squared_error(y_test, y_pred)
-                    print(f'OCRT MSE: {ocrt_mse}')
-                    ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
+                            tree = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
+                                         split_criteria=split_criteria, leaf_prediction_method=leaf_prediction_method, verbose=verbose)
+                            tree.fit(X_train, y_train)
+                            y_pred = tree.predict(X_test)
+                            ocrt_mse = mean_squared_error(y_test, y_pred)
+                            print(f'OCRT MSE: {ocrt_mse}')
+                            ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
 
-                    perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
-                                                                'min_samples_leaf': ocrt_min_samples_leaf,
-                                                                'min_samples_split': ocrt_min_samples_split,
-                                                                'prediction_method': prediction_method,
-                                                                'prediction_method_leaf': prediction_method_leaf,
-                                                                'evaluation_method': evaluation_method,
-                                                                'mse': ocrt_mse, 'nof_infeasibilities': ocrt_nof_infeasibilities,
-                                                                'training_duration': tree.training_duration}, index=[0])])
-                    perf_df.to_csv(f'data/perf_df_{dataset}_new_code.csv', index=False)
+                            perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
+                                                                        'min_samples_leaf': ocrt_min_samples_leaf,
+                                                                        'min_samples_split': ocrt_min_samples_split,
+                                                                        'prediction_method': prediction_method,
+                                                                        'prediction_method_leaf': prediction_method_leaf,
+                                                                        'evaluation_method': evaluation_method,
+                                                                        'mse': ocrt_mse, 'nof_infeasibilities': ocrt_nof_infeasibilities,
+                                                                        'training_duration': tree.training_duration}, index=[0])])
+                            perf_df.to_csv(f'data/perf_df_{dataset}_new_code_depth_{ocrt_depth}.csv', index=False)
+
+    perf_df = pd.read_csv(f'{base_folder}/data/results/perf_df_all.csv')
 
     plot_results = False
     if plot_results:
@@ -647,8 +651,27 @@ if __name__ == '__main__':
 
         report_cols = [x for x in perf_df.columns if (x.endswith(report_metric))]
         perf_df_dataset = perf_df[perf_df['data'] == dataset]
-        perf_df_plot = perf_df_dataset[report_cols].mean()
-        bars = plt.bar([x.split(f'_{report_metric}')[0] for x in perf_df_plot.index], perf_df_plot.values)
-        plt.bar_label(bars, fmt='%.2f')
-        plt.title(f'{dataset}: {report_metric}')
+
+        perf_df_plot = perf_df_dataset.groupby(['prediction_method', 'prediction_method_leaf'])[report_cols].mean()
+        perf_df_plot['run'] = [f'Split: {x[0]} \n Leaf: {x[1]}' for x in perf_df_plot.index]
+
+        plt.figure(figsize=(12, 8))
+        ax = perf_df_plot.mse.plot.bar()
+        ax.set_title(f"Dataset: {dataset} \n Metric: {report_metric.upper()}")
+        ax.set_ylim((0, perf_df_plot.mse.max() * 1.1))
+        ax.set_xlabel("Method")
+        ax.set_ylabel("MSE")
+        ax.set_xticklabels(perf_df_plot.run)
+        ax.tick_params(axis='x', labelrotation=0)
+
+        rects = ax.patches
+        perf_df_plot_nof_inf = perf_df_dataset.groupby(['prediction_method', 'prediction_method_leaf'])[
+            'nof_infeasibilities'].mean()
+        labels = [f'MSE: {round(perf_df_plot.mse.values[i], 2)} \n N.of Inf: {perf_df_plot_nof_inf.values[i]}' for i in
+                  range(len(perf_df_plot.mse.values))]
+
+        for rect, label in zip(rects, labels):
+            height = rect.get_height()
+            ax.text(rect.get_x() + rect.get_width() / 2, height + 5, label, ha="center", va="bottom")
+
         plt.show()

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 series_length = 1000
 dataset = np.zeros(series_length)
@@ -45,3 +46,12 @@ X = X.reshape((X.shape[0], n_features))
 # Print the input-output pairs
 for i in range(len(X)):
     print(X[i], y[i])
+
+feature_cols = [f'Feature {id+1}' for id in range(X.shape[1])]
+target_cols = [f'Target {id + 1}' for id in range(y.shape[1])]
+
+feature_df = pd.DataFrame(X, columns=feature_cols)
+target_df = pd.DataFrame(y, columns=target_cols)
+
+full_df = pd.concat([feature_df, target_df], axis=1)
+full_df.to_csv('data/forecasting.csv', index=False)
