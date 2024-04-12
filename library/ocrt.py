@@ -33,7 +33,7 @@ def calculate_mad(y, predictions):
 def calculate_poisson_deviance(y, predictions):
     return 2 * np.sum(predictions - y - y * np.log(predictions / y))
 
-def formulate_and_solve_lp_cars_data(y, verbose, bigM=100000):
+def formulate_and_solve_lp_cars_data(y, x, verbose = False, bigM=100000):
     # Create a new Gurobi model
     model = gp.Model("Binary and Continuous Variables")
     if not verbose:
@@ -63,7 +63,7 @@ def formulate_and_solve_lp_cars_data(y, verbose, bigM=100000):
 
     return preds
 
-def formulate_and_solve_lp_courses_data(y, verbose):
+def formulate_and_solve_lp_courses_data(y, x, verbose = False):
     num_instances = y.shape[0]
     num_targets = y.shape[1]
 
@@ -98,10 +98,68 @@ def formulate_and_solve_lp_courses_data(y, verbose):
 
     return preds
 
-def formulate_and_solve_lp_forecasting_data(y, verbose):
-    pass
+def formulate_and_solve_lp_forecasting_data(y, x, verbose = False):
+    num_instances = y.shape[0]
+    num_targets = y.shape[1]
 
-def formulate_and_solve_lp_new_class_data(y, verbose):
+    # Create a new model
+    model = gp.Model("Minimize SSE")
+    if not verbose:
+        model.Params.LogToConsole = 0
+
+    # Decision Variables
+    predictions = model.addVars(num_targets, lb=0, ub=100, name="predictions")
+    indicator_70 = model.addVars(num_targets-1, vtype=GRB.BINARY, name=f"indicator_70")
+    indicator_120 = model.addVars(num_targets-1, vtype=GRB.BINARY, name=f"indicator_120")
+
+    # Objective
+    # Minimize the sum of squared errors (SSE) between predictions and actual values
+    sse = gp.quicksum((predictions[j] - y[i][j]) * (predictions[j] - y[i][j]) for i in range(num_instances) for j in range(num_targets))
+    model.setObjective(sse, GRB.MINIMIZE)
+
+    # Constraints
+    X_df = pd.DataFrame(x[:, -3:])
+    if len(X_df.loc[X_df.sum(axis=1) > 120]):
+        model.addConstr(predictions[0] <= 10)
+    if len(X_df[X_df.loc[:, [1, 2]].sum(axis=1) > 70]):
+        model.addConstr(predictions[0] <= 50)
+
+    # Constraint: If sum >= 70, then next prediction should be less than 50
+    model.addConstr(predictions[0] + max(X_df[2]) >= 70 * indicator_70[0])
+    model.addConstr(predictions[0] <= 50 + 50 * (1 - indicator_70[0]))
+
+    # Constraint: If sum >= 120, then next prediction should be less than 10
+    model.addConstr(predictions[2] + predictions[1] + max(X_df[2]) >= 120 * indicator_120[0])
+    model.addConstr(predictions[2] <= 10 + 90 * (1 - indicator_120[0]))
+
+    model.addConstr(predictions[1] + X_df.loc[:, 1:2].sum(axis=1).max() >= 120 * indicator_120[1])
+    model.addConstr(predictions[1] <= 10 + 90 * (1 - indicator_120[1]))
+
+    for i in range(2, num_targets):
+        # Constraint: If sum >= 70, then next prediction should be less than 50
+        model.addConstr(predictions[i - 1] + predictions[i - 2] >= 70 * indicator_70[i-1])
+        model.addConstr(predictions[i] <= 50 + 50 * (1 - indicator_70[i-1]))
+
+        if i > 2:
+            # Constraint: If sum >= 120, then next prediction should be less than 10
+            model.addConstr(predictions[i - 1] + predictions[i - 2] + predictions[i - 3] >= 120 * indicator_120[i-1])
+            model.addConstr(predictions[i] <= 10 + 90 * (1 - indicator_120[i-1]))
+
+    # Optimize the model
+    model.optimize()
+
+    if verbose:
+        print("Optimal Solution:")
+        for i in range(num_targets):
+            print(f"Target {i + 1}: Prediction = {predictions[i].X}")
+        print("Objective (Sum of Squared Errors):", model.objVal)
+
+    preds = np.array([predictions[i].X for i in range(num_targets)])
+
+    return preds
+
+
+def formulate_and_solve_lp_new_class_data(y, x, lagrangian_multiplier = 0, verbose = False):
     num_instances = y.shape[0]
     num_targets = y.shape[1]
 
@@ -116,17 +174,35 @@ def formulate_and_solve_lp_new_class_data(y, verbose):
 
     # Create objective function
     sse = gp.quicksum((predictions[j] - y[i][j]) * (predictions[j] - y[i][j]) for i in range(num_instances) for j in range(num_targets))
-    model.setObjective(sse, GRB.MINIMIZE)
 
-    # Create constraints
-    for i in range(num_targets):
-        model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
+    if lagrangian_multiplier > 0:
+        # Constraints penalization terms
+        constraint_terms = gp.QuadExpr(0)
 
-    model.addConstr(predictions[1] >= 50 * binary_vars[2], "y_constraint_1")
-    model.addConstr(predictions[1] + predictions[2] >= 110 * binary_vars[0], "y_constraint_2")
+        # Constraint 1: predictions[i] <= 110 * binary_vars[i]
+        for i in range(num_targets):
+            constraint_terms.add(predictions[i] - 110 * binary_vars[i])
+
+        # Constraint 2: predictions[1] >= 50 * binary_vars[2]
+        constraint_terms.add(50 * binary_vars[2] - predictions[1])
+
+        # Constraint 3: predictions[1] + predictions[2] >= 110 * binary_vars[0]
+        constraint_terms.add(110 * binary_vars[0] - predictions[1] - predictions[2])
+
+        # Add Lagrangian relaxation term to the objective function
+        sse += lagrangian_multiplier * constraint_terms * num_instances
+    else:
+        # Create constraints
+        for i in range(num_targets):
+            model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
+
+        model.addConstr(predictions[1] >= 50 * binary_vars[2], "y_constraint_1")
+        model.addConstr(predictions[1] + predictions[2] >= 110 * binary_vars[0], "y_constraint_2")
 
     # Solve the problem
+    model.setObjective(sse, GRB.MINIMIZE)
     model.optimize()
+    model.write('/home/user/Desktop/Research/OCRT/model_4.lp')
 
     if verbose:
         print("Optimal Solution:")
@@ -138,7 +214,7 @@ def formulate_and_solve_lp_new_class_data(y, verbose):
 
     return preds
 
-def calculate_number_of_infeasibilities(y_pred, dataset, model, ocrt_depth, target_cols):
+def calculate_number_of_infeasibilities(y_pred, X_test, dataset, model, ocrt_depth, target_cols, verbose=True):
     if dataset == 'class':
         cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
         nof_infeasibilities = np.sum(cumsums >= 3)
@@ -149,19 +225,33 @@ def calculate_number_of_infeasibilities(y_pred, dataset, model, ocrt_depth, targ
                 nof_infeasibilities += 1
             elif (round(y_pred[i][1] + y_pred[i][2], 4) < 110) and (y_pred[i][0] > 0.0001):
                 nof_infeasibilities += 1
+    elif dataset == 'forecasting':
+        nof_infeasibilities = 0
+        nof_infeasibilities += y_pred[y_pred > 100].shape[0]
+        y_pred_df = pd.DataFrame(y_pred, index=X_test.index)
+        y_pred_df = pd.concat([X_test.iloc[:, -3:], y_pred_df], axis=1)
+        y_pred_df.columns = range(y_pred_df.shape[1])
+        for i in range(1, y_pred_df.shape[1] - 2):
+            nof_infeasibilities += y_pred_df[(y_pred_df.loc[:, [i, i+1]].sum(axis=1) > 70) &
+                                             (y_pred_df.loc[:, i+2] > 50)].shape[0]
+        for i in range(y_pred_df.shape[1] - 3):
+            nof_infeasibilities += y_pred_df[(y_pred_df.loc[:, i: i + 2].sum(axis=1) > 120) &
+                                             (y_pred_df.loc[:, i + 3] > 10)].shape[0]
     else:
         y_pred_df = pd.DataFrame(y_pred, columns=target_cols)
         nof_infeasibilities = y_pred_df[(y_pred_df['TARGET_FLAG'] == 0) & (y_pred_df['TARGET_AMT'] > 0)].shape[0]
 
-    print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {nof_infeasibilities}')
+    if verbose:
+        print(f'Number of infeasible predictions for {model} (Depth {ocrt_depth}): {nof_infeasibilities}')
 
     return nof_infeasibilities
 
-def split_criteria_with_methods(y, prediction_method, evaluation_method, optimization_problem, verbose=False):
+def split_criteria_with_methods(y, x, nof_infeasibilities_method, lagrangian_multiplier, prediction_method,
+                                evaluation_method, optimization_problem, verbose=False):
     if prediction_method == 'medoid':
         predictions = return_medoid(y)
     elif prediction_method == 'optimal':
-        predictions = optimization_problem(y, verbose)
+        predictions = optimization_problem(y, x, lagrangian_multiplier, verbose)
     else:
         predictions = return_mean(y)
 
@@ -171,6 +261,10 @@ def split_criteria_with_methods(y, prediction_method, evaluation_method, optimiz
         split_evaluation = calculate_mad(y, predictions)
     else:
         split_evaluation = calculate_poisson_deviance(y, predictions)
+
+    predictions_all = (predictions * np.ones((y.shape[0], y.shape[1])))
+    nof_infeasibilities = nof_infeasibilities_method(predictions_all, x)
+    # split_evaluation += nof_infeasibilities * lagrangian_multiplier
 
     return predictions, split_evaluation
 
@@ -257,12 +351,14 @@ class OCDT:
                  split_criteria = None,
                  leaf_prediction_method = None,
                  ocrt_solve_only_leaves = False,
+                 nof_infeasibilities_method = None,
                  verbose = False):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
         self.split_criteria = split_criteria
         self.ocrt_solve_only_leaves = ocrt_solve_only_leaves
+        self.nof_infeasibilities_method = nof_infeasibilities_method
         self.leaf_prediction_method = leaf_prediction_method
         self.verbose = verbose
         self.Tree = None
@@ -276,7 +372,7 @@ class OCDT:
             labels (pandas.DataFrame): The labels or target variables corresponding to the features.
             node (Node): The current node in the tree being built.
         """
-        node.prediction, _ = self.split_criteria(labels.to_numpy())
+        node.prediction, _ = self.split_criteria(labels.to_numpy(), features.to_numpy(), self.nof_infeasibilities_method)
 
         node.count = labels.shape[0]
         if node.depth >= self.max_depth:
@@ -345,7 +441,8 @@ class OCDT:
         for leaf_id in np.unique(leaves):
             leaf_indices = np.where(leaves == leaf_id)[0]
             leaf_labels = labels.iloc[leaf_indices].to_numpy()
-            leaf_predictions[leaf_id], _ = self.leaf_prediction_method(leaf_labels)
+            leaf_features = features.iloc[leaf_indices].to_numpy()
+            leaf_predictions[leaf_id], _ = self.leaf_prediction_method(leaf_labels, leaf_features, self.nof_infeasibilities_method)
         self.leaf_predictions_df = pd.DataFrame(leaf_predictions)
         end = time.time()
         self.training_duration = end-start
@@ -476,14 +573,18 @@ class OCDT:
 
             for i in range(self.min_samples_leaf, n - self.min_samples_leaf - 1):
                 xi = sort_x[i]
+
                 left_yi = sort_y[:i, :]
                 right_yi = sort_y[i:, :]
+
+                left_xi = features.to_numpy()[sort_idx][:i]
+                right_xi = features.to_numpy()[sort_idx][i:]
 
                 left_instance_count = left_yi.shape[0]
                 right_instance_count = right_yi.shape[0]
 
-                left_prediction, left_perf = self.split_criteria(left_yi)
-                right_prediction, right_perf = self.split_criteria(right_yi)
+                left_prediction, left_perf = self.split_criteria(left_yi, left_xi, self.nof_infeasibilities_method)
+                right_prediction, right_perf = self.split_criteria(right_yi, right_xi, self.nof_infeasibilities_method)
                 curr_score = (left_perf * left_instance_count + right_perf * right_instance_count) / n
 
                 split_perf[cut_id, 0] = curr_score
@@ -519,11 +620,11 @@ if __name__ == '__main__':
     prediction_method_leaf = 'medoid'  # mean, medoid, optimal
     evaluation_method = 'mse' # mse, mad, poisson
 
-    ocrt_depth_list = [12]
+    ocrt_depth_list = [6, 9, 12, 15]
     dataset_list = ['newclass', 'class', 'cars']
     evaluation_method_list = ['mse']
-    prediction_method_leaf_list = ['optimal', 'medoid']
-    prediction_method_list = ['mean', 'medoid', 'optimal']
+    prediction_method_leaf_list = ['medoid', 'optimal']
+    prediction_method_list = ['optimal', 'mean', 'medoid']
 
     for ocrt_depth in ocrt_depth_list:
         for dataset in dataset_list:
@@ -532,6 +633,7 @@ if __name__ == '__main__':
             if dataset == 'class':
                 optimization_problem = formulate_and_solve_lp_courses_data
                 target_cols = [f'Course{id + 1}' for id in range(class_target_size)]
+                lagrangian_multiplier = 1500
                 if class_target_size == 3:
                     feature_size = 2
                     feature_cols = [f'Feature{id + 1}' for id in range(feature_size)]
@@ -550,9 +652,9 @@ if __name__ == '__main__':
             elif dataset == 'forecasting':
                 optimization_problem = formulate_and_solve_lp_forecasting_data
                 full_df = pd.read_csv(f'{base_folder}/data/forecasting.csv')
-                feature_cols = [f'Feature {id + 1}' for id in range(X.shape[1])]
-                target_cols = [f'Target {id + 1}' for id in range(y.shape[1])]
-
+                feature_cols = [f'Feature {id + 1}' for id in range(30)]
+                target_cols = [f'Target {id + 1}' for id in range(6)]
+                lagrangian_multiplier = 1000
                 features_df = full_df[feature_cols]
                 targets_df = full_df[target_cols]
             elif dataset == 'newclass':
@@ -560,7 +662,7 @@ if __name__ == '__main__':
                 feature_cols = ['gender', 'race/ethnicity', 'parental level of education',
                                 'lunch', 'test preparation course']
                 target_cols = ['math score', 'reading score', 'writing score']
-
+                lagrangian_multiplier = 500
                 full_df = pd.read_csv(f'{base_folder}/data/constrained_exams.csv')
 
                 features_df = full_df[feature_cols]
@@ -571,7 +673,7 @@ if __name__ == '__main__':
 
                 target_cols = ['TARGET_FLAG', 'TARGET_AMT']
                 targets_df = full_df[target_cols]
-
+                lagrangian_multiplier = 20000000
                 feature_cols = ['KIDSDRIV', 'AGE', 'HOMEKIDS', 'YOJ', 'INCOME', 'HOME_VAL', 'TRAVTIME',
                                 'BLUEBOOK', 'TIF', 'OLDCLAIM', 'CLM_FREQ', 'MVR_PTS', 'CAR_AGE']
                 features_df = full_df[feature_cols]
@@ -597,7 +699,7 @@ if __name__ == '__main__':
                 y_pred_sklearn = regressor.predict(X_test)
                 dt_mse = mean_squared_error(y_test, y_pred_sklearn)
                 print(f'DT MSE: {dt_mse}')
-                dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, dataset, 'DT',
+                dt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred_sklearn, X_test, dataset, 'DT',
                                                                              regressor.get_depth(), target_cols)
 
                 perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
@@ -617,16 +719,21 @@ if __name__ == '__main__':
                             print(f'Split Prediction: {prediction_method}')
                             print(f'Leaf Prediction: {prediction_method_leaf}')
 
-                            split_criteria = lambda y: split_criteria_with_methods(y, prediction_method, evaluation_method, optimization_problem, verbose)
-                            leaf_prediction_method = lambda y: split_criteria_with_methods(y, prediction_method_leaf, evaluation_method, optimization_problem, verbose)
+                            nof_infeasibilities_method = lambda y, x: calculate_number_of_infeasibilities(y, x, dataset,
+                                                                                      'OCRT', ocrt_depth, target_cols, verbose)
+                            split_criteria = lambda y, x, nof_infeasibilities_method: split_criteria_with_methods(y, x, nof_infeasibilities_method,
+                                    lagrangian_multiplier, prediction_method, evaluation_method, optimization_problem, verbose)
+                            leaf_prediction_method = lambda y, x, nof_infeasibilities_method: split_criteria_with_methods(y, x, nof_infeasibilities_method,
+                                    lagrangian_multiplier, prediction_method_leaf, evaluation_method, optimization_problem, verbose)
 
                             tree = OCDT(max_depth=ocrt_depth, min_samples_leaf=ocrt_min_samples_leaf, min_samples_split=ocrt_min_samples_split,
-                                         split_criteria=split_criteria, leaf_prediction_method=leaf_prediction_method, verbose=verbose)
+                                         split_criteria=split_criteria, leaf_prediction_method=leaf_prediction_method,
+                                         nof_infeasibilities_method=nof_infeasibilities_method, verbose=verbose)
                             tree.fit(X_train, y_train)
                             y_pred = tree.predict(X_test)
                             ocrt_mse = mean_squared_error(y_test, y_pred)
                             print(f'OCRT MSE: {ocrt_mse}')
-                            ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, dataset, 'OCRT', ocrt_depth, target_cols)
+                            ocrt_nof_infeasibilities = calculate_number_of_infeasibilities(y_pred, X_test, dataset, 'OCRT', ocrt_depth, target_cols)
 
                             perf_df = pd.concat([perf_df, pd.DataFrame({'data': dataset, 'fold': cv_fold, 'depth': ocrt_depth,
                                                                         'min_samples_leaf': ocrt_min_samples_leaf,
@@ -636,9 +743,10 @@ if __name__ == '__main__':
                                                                         'evaluation_method': evaluation_method,
                                                                         'mse': ocrt_mse, 'nof_infeasibilities': ocrt_nof_infeasibilities,
                                                                         'training_duration': tree.training_duration}, index=[0])])
-                            perf_df.to_csv(f'data/perf_df_{dataset}_new_code_depth_{ocrt_depth}.csv', index=False)
+                            perf_df.to_csv(f'data/perf_df_{dataset}_new_code_depth_{ocrt_depth}_with_lagrangian_in_opt.csv', index=False)
 
     perf_df = pd.read_csv(f'{base_folder}/data/results/perf_df_all.csv')
+
 
     plot_results = False
     if plot_results:
