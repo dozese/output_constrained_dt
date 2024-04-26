@@ -3,10 +3,9 @@ import pandas as pd
 
 from sklearn.metrics import mean_squared_error
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 
-data_size = 1000
+data_size = 4000
 
 feature_cols = ['EnrolledElectiveBefore', 'GradeAvgFromPreviousElective',
                             'Grade', 'Major', 'Class', 'GradePerm']
@@ -97,25 +96,38 @@ targets_df
 
 full_df = pd.concat([features_df, targets_df], axis=1)
 
-x_train, x_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.3, random_state=0)
+rstate = 23
+x_train, x_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.3, random_state=rstate)
 
-regressor = RandomForestRegressor(n_estimators=100, random_state=0)
-regressor.fit(x_train, y_train)
-y_pred = regressor.predict(x_test)
-print('\nRF Accuracy: ', mean_squared_error(y_test, y_pred))
-cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-print('Number of infeasible predictions for RF: ', np.sum(cumsums >= 3))
+# regressor = RandomForestRegressor(n_estimators=100, random_state=0)
+# regressor.fit(x_train, y_train)
+# y_pred = regressor.predict(x_test)
+# print('\nRF Accuracy: ', mean_squared_error(y_test, y_pred))
+# cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
+# print('Number of infeasible predictions for RF: ', np.sum(cumsums >= 3))
 
-regressor = DecisionTreeRegressor(random_state=0)
-regressor.fit(x_train, y_train)
-y_pred = regressor.predict(x_test)
-print('\nDT Accuracy: ', mean_squared_error(y_test, y_pred))
-cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-print('Number of infeasible predictions for DT: ', np.sum(cumsums >= 3))
+nplots = 30
+results = np.zeros((nplots-1, 2))
+for md in range(1, nplots):
+    regressor = DecisionTreeRegressor(max_depth=md, min_samples_leaf=1, random_state=rstate)
+    regressor.fit(x_train, y_train)
+    y_pred = regressor.predict(x_test)
+    acc = mean_squared_error(y_test, y_pred)
+    results[md-1, 0] = acc
+    print('\nDT Accuracy: ', acc)
+    cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
+    infeasible = np.sum(cumsums >= 3)
+    results[md-1, 1] = infeasible
+    print('Number of infeasible predictions for DT: ', infeasible)
 
-regressor = DecisionTreeRegressor(random_state=0, max_depth=3)
-regressor.fit(x_train, y_train)
-y_pred = regressor.predict(x_test)
-print('\nDT(max_depth=3) Accuracy: ', mean_squared_error(y_test, y_pred))
-cumsums = np.array([sum(y_pred[i] > 0.0001) for i in range(len(y_pred))])
-print('Number of infeasible predictions for DT(max_depth=3): ', np.sum(cumsums >= 3))
+## Plotting
+import matplotlib.pyplot as plt
+fig, axs = plt.subplots(1, 2)
+fig.suptitle('Vertically stacked subplots')
+x = np.arange(1, nplots)
+y = results[:, 0]
+axs[0].plot(x, y)
+y = results[:, 1]
+axs[1].bar(x, y)
+
+plt.show()
