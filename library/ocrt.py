@@ -33,7 +33,7 @@ def calculate_mad(y, predictions):
 def calculate_poisson_deviance(y, predictions):
     return 2 * np.sum(predictions - y - y * np.log(predictions / y))
 
-def formulate_and_solve_lp_cars_data(y, x, verbose = False, bigM=100000):
+def formulate_and_solve_lp_cars_data(y, x, lagrangian_multiplier=0, verbose=False, bigM=100000):
     # Create a new Gurobi model
     model = gp.Model("Binary and Continuous Variables")
     if not verbose:
@@ -45,14 +45,29 @@ def formulate_and_solve_lp_cars_data(y, x, verbose = False, bigM=100000):
 
     # Objective: Minimize Sum of Squared Errors (SSE)
     sse = gp.quicksum((predictions[0] - y[i][1]) * (predictions[0] - y[i][1]) for i in range(y.shape[0]))
-    model.setObjective(sse, GRB.MINIMIZE)
 
-    # Constraints
-    model.addConstr(predictions[0] >= binary_vars[0], "y_constraint")
-    model.addConstr(predictions[0] <= bigM * binary_vars[0], "y_upper_bound_constraint")
+    if lagrangian_multiplier > 0:
+        # Constraint penalization terms
+        constraint_terms = gp.QuadExpr(0)
+
+        # Constraint 1: predictions[0] >= binary_vars[0]
+        constraint_terms.add(predictions[0] - binary_vars[0])
+
+        # Constraint 2: predictions[0] <= bigM * binary_vars[0]
+        constraint_terms.add(bigM * binary_vars[0] - predictions[0])
+
+        # Add Lagrangian relaxation term to the objective function
+        sse += lagrangian_multiplier * constraint_terms
+    else:
+        # Constraints
+        model.addConstr(predictions[0] >= binary_vars[0], "y_constraint")
+        model.addConstr(predictions[0] <= bigM * binary_vars[0], "y_upper_bound_constraint")
+
+    model.setObjective(sse, GRB.MINIMIZE)
 
     # Optimize the model
     model.optimize()
+    # model.write('/home/user/Desktop/Research/OCRT/model.lp')
 
     preds = np.array([binary_vars[0].X, predictions[0].X])
 
@@ -63,7 +78,7 @@ def formulate_and_solve_lp_cars_data(y, x, verbose = False, bigM=100000):
 
     return preds
 
-def formulate_and_solve_lp_courses_data(y, x, verbose = False):
+def formulate_and_solve_lp_courses_data(y, x, lagrangian_multiplier=0, verbose=False):
     num_instances = y.shape[0]
     num_targets = y.shape[1]
 
@@ -78,15 +93,30 @@ def formulate_and_solve_lp_courses_data(y, x, verbose = False):
 
     # Create objective function
     sse = gp.quicksum((predictions[j] - y[i][j]) * (predictions[j] - y[i][j]) for i in range(num_instances) for j in range(num_targets))
-    model.setObjective(sse, GRB.MINIMIZE)
 
-    # Create constraints
-    model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
-    for i in range(num_targets):
-        model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
+    if lagrangian_multiplier > 0:
+        # Constraints penalization terms
+        constraint_terms = gp.QuadExpr(0)
+
+        # One prediction constraint
+        constraint_terms.add(binary_vars.sum() - 1)
+
+        # Constraint 1: predictions[i] <= 110 * binary_vars[i]
+        for i in range(num_targets):
+            constraint_terms.add(predictions[i] - 110 * binary_vars[i])
+
+        # Add Lagrangian relaxation term to the objective function
+        sse += lagrangian_multiplier * constraint_terms * num_instances
+    else:
+        # Create constraints
+        model.addConstr(binary_vars.sum() <= 1, "one_prediction_constraint")
+        for i in range(num_targets):
+            model.addConstr(predictions[i] <= 110 * binary_vars[i], f"z_relationship_{i}")
 
     # Solve the problem
+    model.setObjective(sse, GRB.MINIMIZE)
     model.optimize()
+    # model.write('/home/user/Desktop/Research/OCRT/model.lp')
 
     if verbose:
         print("Optimal Solution:")
@@ -98,7 +128,8 @@ def formulate_and_solve_lp_courses_data(y, x, verbose = False):
 
     return preds
 
-def formulate_and_solve_lp_forecasting_data(y, x, verbose = False):
+
+def formulate_and_solve_lp_forecasting_data(y, x, lagrangian_multiplier = 0, verbose = False):
     num_instances = y.shape[0]
     num_targets = y.shape[1]
 
@@ -202,7 +233,7 @@ def formulate_and_solve_lp_new_class_data(y, x, lagrangian_multiplier = 0, verbo
     # Solve the problem
     model.setObjective(sse, GRB.MINIMIZE)
     model.optimize()
-    model.write('/home/user/Desktop/Research/OCRT/model_4.lp')
+    # model.write('/home/user/Desktop/Research/OCRT/model.lp')
 
     if verbose:
         print("Optimal Solution:")
@@ -743,10 +774,7 @@ if __name__ == '__main__':
                                                                         'evaluation_method': evaluation_method,
                                                                         'mse': ocrt_mse, 'nof_infeasibilities': ocrt_nof_infeasibilities,
                                                                         'training_duration': tree.training_duration}, index=[0])])
-                            perf_df.to_csv(f'data/perf_df_{dataset}_new_code_depth_{ocrt_depth}_with_lagrangian_in_opt.csv', index=False)
-
-    perf_df = pd.read_csv(f'{base_folder}/data/results/perf_df_all.csv')
-
+                            perf_df.to_csv(f'data/perf_df_{dataset}_split_{prediction_method}_leaf_{prediction_method_leaf}_depth_{ocrt_depth}.csv', index=False)
 
     plot_results = False
     if plot_results:
@@ -754,32 +782,83 @@ if __name__ == '__main__':
         matplotlib.use("TkAgg")
         from matplotlib import pyplot as plt
 
+        # perf_df = pd.read_csv('data/latest_results/perf_df_all.csv')
+
         report_metric = 'mse'
         dataset = 'newclass'
 
-        report_cols = [x for x in perf_df.columns if (x.endswith(report_metric))]
+        report_cols = [report_metric, 'training_duration']
         perf_df_dataset = perf_df[perf_df['data'] == dataset]
 
-        perf_df_plot = perf_df_dataset.groupby(['prediction_method', 'prediction_method_leaf'])[report_cols].mean()
-        perf_df_plot['run'] = [f'Split: {x[0]} \n Leaf: {x[1]}' for x in perf_df_plot.index]
+        perf_df_plot = perf_df_dataset.groupby(['prediction_method', 'prediction_method_leaf'])[report_cols].mean().reset_index()
+        perf_df_plot.loc[perf_df_plot['prediction_method'] == 'mean', 'prediction_method'] = 'average'
+        perf_df_plot.loc[perf_df_plot['prediction_method'] == 'lagrangian', 'prediction_method'] = 'relaxation'
+        perf_df_plot.loc[perf_df_plot['prediction_method_leaf'] == 'lagrangian', 'prediction_method_leaf'] = 'relaxation'
+        perf_df_plot = perf_df_plot.set_index(['prediction_method', 'prediction_method_leaf'])
+        perf_df_plot['run'] = [f'S({x[0][0].upper()}) - L({x[1][0].upper()})' for x in perf_df_plot.index]
 
-        plt.figure(figsize=(12, 8))
-        ax = perf_df_plot.mse.plot.bar()
-        ax.set_title(f"Dataset: {dataset} \n Metric: {report_metric.upper()}")
-        ax.set_ylim((0, perf_df_plot.mse.max() * 1.1))
-        ax.set_xlabel("Method")
-        ax.set_ylabel("MSE")
-        ax.set_xticklabels(perf_df_plot.run)
-        ax.tick_params(axis='x', labelrotation=0)
+        perf_df_plot['mse'] = perf_df_plot['mse'] / perf_df_plot['mse'].max()
+        perf_df_plot['training_duration'] = perf_df_plot['training_duration'] / perf_df_plot['training_duration'].max()
 
-        rects = ax.patches
+        fig, ax1 = plt.subplots(figsize=(16, 8))
+
+        ax1 = perf_df_plot[report_metric].plot.bar()
+        
+        # ax.set_title(f"Dataset: {dataset.upper()}", weight='bold', fontsize=20) # \n Metric: {report_metric.upper()}")
+        ax1.set_ylim((0, perf_df_plot[report_metric].max() * 1.1))
+        ax1.set_xlabel("Method", weight='bold', labelpad=15, fontsize=22)
+        ax1.set_ylabel("(Scaled) Mean Squared Error", weight='bold', labelpad=15, fontsize=22)
+        ax1.set_xticklabels(perf_df_plot.run, color='black', fontsize=16)
+        ax1.set_yticklabels([x/10 for x in range(0, 11, 2)], fontsize=16)
+        ax1.tick_params(axis='x', labelrotation=0)
+
+        # Axis formatting.
+        ax1.spines['top'].set_visible(False)
+        ax1.spines['right'].set_visible(False)
+        ax1.spines['left'].set_visible(False)
+        ax1.spines['bottom'].set_color('#DDDDDD')
+        ax1.tick_params(bottom=False, left=False, length=0)
+        ax1.set_axisbelow(True)
+        ax1.yaxis.grid(True, color='#EEEEEE')
+        ax1.xaxis.grid(False)
+
+        rects = ax1.patches
         perf_df_plot_nof_inf = perf_df_dataset.groupby(['prediction_method', 'prediction_method_leaf'])[
             'nof_infeasibilities'].mean()
-        labels = [f'MSE: {round(perf_df_plot.mse.values[i], 2)} \n N.of Inf: {perf_df_plot_nof_inf.values[i]}' for i in
-                  range(len(perf_df_plot.mse.values))]
 
+        labels = ['MSE: ' + f'{round(perf_df_plot.mse.values[i], 3):.3f}' + '\n N. of Inf: ' + 
+                  f'{round(perf_df_plot_nof_inf.values[i], 1):.1f}' for i in
+                    range(len(perf_df_plot.mse.values))]
+
+        bar_color = ax1.patches[0].get_facecolor()
         for rect, label in zip(rects, labels):
             height = rect.get_height()
-            ax.text(rect.get_x() + rect.get_width() / 2, height + 5, label, ha="center", va="bottom")
+            ax1.text(rect.get_x() + rect.get_width() / 2, height + 0.01, label, 
+                    ha="center", va="bottom", color='blue', fontsize=15)
+            
+        ax2 = ax1.twinx()
+        #Plot a line
+        
+        # ax1 = perf_df_plot[report_metric].plot.bar()
+        # ax2.plot()
+        # t = np.arange(0.01, 10.0, 0.01)
+        # ax2.plot(t, np.sin(0.25*np.pi*t), 'r-')
+        ax2.plot(perf_df_plot['training_duration'].values, 'r-', linewidth=4)
+
+        # Make the y-axis label and tick labels match the line color.
+        ax2.set_ylabel('(Scaled) Training Duration', color='black', weight='bold', labelpad=15, fontsize=22)
+
+        # Axis formatting.
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_visible(False)
+        ax2.spines['left'].set_visible(False)
+        ax2.spines['bottom'].set_color('#DDDDDD')
+        ax2.tick_params(bottom=False, left=False, length=0)
+        ax2.yaxis.set_tick_params(labelsize=18)
+        ax2.set_axisbelow(True)
+        ax2.yaxis.grid(True, color='#EEEEEE')
+        ax2.xaxis.grid(False)
+
+        fig.tight_layout()
 
         plt.show()
