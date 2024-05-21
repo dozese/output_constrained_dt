@@ -16,15 +16,11 @@ if __name__ == '__main__':
     ocdt_min_samples_split = 10
     ocdt_min_samples_leaf = 5
     number_of_folds = 5
-
-    # dataset = 'class' # class, cars, scores
-    dataset = 'class'
     verbose = False
-
     ocdt_depth_list = [15]
     class_target_size = 7
     class_size = 1000
-    dataset_list = ['class']
+    dataset_list = ['class'] # class, cars, scores
     evaluation_method_list = ['mse'] # mse, mad, poisson
     prediction_method_leaf_list = ['medoid'] # medoid, optimal
     prediction_method_list = ['mean'] # mean, medoid, optimal
