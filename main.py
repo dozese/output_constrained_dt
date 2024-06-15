@@ -1,5 +1,4 @@
 import os
-import time
 import pandas as pd
 
 from sklearn.model_selection import train_test_split
@@ -8,6 +7,9 @@ from sklearn.metrics import mean_squared_error
 from apps import formulate_and_solve_lp_scores_data
 from library.utils import *
 from library.ocdt import OCDT
+
+SEED = 0
+np.random.seed(SEED)
 
 base_folder = os.getcwd()
 
@@ -27,7 +29,7 @@ if __name__ == '__main__':
     feature_cols = ['gender', 'race/ethnicity', 'parental level of education',
                     'lunch', 'test preparation course']
     target_cols = ['math score', 'reading score', 'writing score']
-    lagrangian_multiplier = 500
+    lagrangian_multiplier = 0
     full_df = pd.read_csv(f'{base_folder}/data/constrained_exams.csv')
 
     features_df = full_df[feature_cols]
@@ -39,11 +41,10 @@ if __name__ == '__main__':
     if extract_one_hot:
         features_df = pd.get_dummies(features_df, columns=features_df.columns, drop_first=True, dtype=int)
 
-    X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.3, random_state=0)
+    X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.2, random_state=SEED)
 
     nof_infeasibilities_method = lambda y, x: calculate_number_of_infeasibilities(y, x, 'scores',
                                                             'OCDT', ocdt_depth, target_cols, verbose)
-    lagrangian_multiplier = 0
     split_criteria = lambda y, x, nof_infeasibilities_method: split_criteria_with_methods(y, x, nof_infeasibilities_method,
             lagrangian_multiplier, prediction_method, evaluation_method, optimization_problem, verbose)
     leaf_prediction_method = lambda y, x, nof_infeasibilities_method: split_criteria_with_methods(y, x, nof_infeasibilities_method,
