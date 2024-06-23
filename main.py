@@ -19,7 +19,6 @@ if __name__ == '__main__':
     ocdt_min_samples_leaf = 5
     number_of_folds = 5
     verbose = False
-    extract_one_hot = False
     evaluation_method = 'mse' # mse, mad, poisson
     prediction_method_leaf = 'medoid' # medoid, optimal
     prediction_method = 'mean' # mean, medoid, optimal
@@ -33,13 +32,11 @@ if __name__ == '__main__':
     full_df = pd.read_csv(f'{base_folder}/data/constrained_exams.csv')
 
     features_df = full_df[feature_cols]
+    features_df = pd.get_dummies(features_df, columns=features_df.columns, drop_first=True, dtype=int) # for scores data
     targets_df = full_df[target_cols]
 
     num_rows = features_df.shape[0]
     num_targets = targets_df.shape[1]
-
-    if extract_one_hot:
-        features_df = pd.get_dummies(features_df, columns=features_df.columns, drop_first=True, dtype=int)
 
     X_train, X_test, y_train, y_test = train_test_split(features_df, targets_df, test_size = 0.2, random_state=SEED)
 
