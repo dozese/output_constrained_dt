@@ -17,6 +17,7 @@ if __name__ == '__main__':
     ocdt_min_samples_leaf = 5
     number_of_folds = 5
     verbose = False
+    use_hashmaps = True
     ocdt_depth_list = [15]
     class_target_size = 7
     class_size = 1000
@@ -123,7 +124,7 @@ if __name__ == '__main__':
 
                             tree = OCDT(max_depth=ocdt_depth, min_samples_leaf=ocdt_min_samples_leaf, min_samples_split=ocdt_min_samples_split,
                                         split_criteria=split_criteria, leaf_prediction_method=leaf_prediction_method,
-                                        nof_infeasibilities_method=nof_infeasibilities_method, verbose=verbose)
+                                        nof_infeasibilities_method=nof_infeasibilities_method, verbose=verbose, use_hashmaps = use_hashmaps)
                             tree.fit(X_train, y_train)
                             # tree.get_rules(X_train.iloc[1:40], tree.max_depth, tree.Tree, [])
                             y_pred = tree.predict(X_test)
