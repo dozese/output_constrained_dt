@@ -24,7 +24,7 @@ if __name__ == '__main__':
     class_size = 1000
     dataset_list = ['class'] # class, cars, scores
     evaluation_method_list = ['mse'] # mse, mad, poisson
-    prediction_method_leaf_list = ['medoid'] # medoid, optimal
+    prediction_method_leaf_list = ['mean'] # mean, medoid, optimal
     prediction_method_list = ['mean'] # mean, medoid, optimal
 
     perf_df = pd.DataFrame()
